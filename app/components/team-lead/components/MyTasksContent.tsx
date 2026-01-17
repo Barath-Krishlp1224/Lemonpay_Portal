@@ -1,5 +1,5 @@
 import React from "react";
-import MyTasks from "../../view-task/page"; // <-- update path if needed
+import MyTasks from "../../employee/page"; // <-- update path if needed
 
 const MyTasksContent = () => {
   return <MyTasks />;

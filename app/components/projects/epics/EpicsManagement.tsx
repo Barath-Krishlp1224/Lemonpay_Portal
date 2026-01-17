@@ -1,4 +1,3 @@
-// app/components/projects/epics/EpicsManagement.tsx
 "use client";
 
 import React, { useState, useEffect, useMemo } from "react";
@@ -9,6 +8,13 @@ import {
   MoreVertical, CheckCircle, PlayCircle, Eye, Circle
 } from "lucide-react";
 import type { Employee, SavedProject, Epic } from "@/app/types/project";
+
+// Extend Epic type locally to include task count properties
+interface EpicWithTasks extends Epic {
+  taskCount?: number;
+  totalTasks?: number;
+  completedTasks?: number;
+}
 
 interface EpicsManagementProps {
   selectedProject: SavedProject | null;
@@ -24,7 +30,7 @@ export default function EpicsManagement({
   const [loading, setLoading] = useState(false);
   const [loadingEpics, setLoadingEpics] = useState(false);
   const [message, setMessage] = useState<string>("");
-  const [epics, setEpics] = useState<Epic[]>([]);
+  const [epics, setEpics] = useState<EpicWithTasks[]>([]);
   const [showEpicForm, setShowEpicForm] = useState(false);
   const [editingEpicId, setEditingEpicId] = useState<string | null>(null);
   const [statusDropdownOpen, setStatusDropdownOpen] = useState<string | null>(null);
@@ -39,15 +45,24 @@ export default function EpicsManagement({
     name: "",
     summary: "",
     description: "",
-    status: "Todo" as "Todo" | "In Progress" | "Review" | "Done",
+    status: "Not Started" as "Not Started" | "Todo" | "In Progress" | "Review" | "Done",
     priority: "Medium" as "Low" | "Medium" | "High" | "Critical",
     startDate: new Date().toISOString().split('T')[0],
     endDate: "",
     ownerId: employees.length > 0 ? employees[0]._id : "",
-    assigneeIds: [] as string[],
     labels: [] as string[],
     currentLabel: "",
   });
+
+  // Update the ownerId when employees array changes
+  useEffect(() => {
+    if (employees.length > 0 && !epicFormData.ownerId) {
+      setEpicFormData(prev => ({
+        ...prev,
+        ownerId: employees[0]._id
+      }));
+    }
+  }, [employees]);
 
   // Helper to get owner name from epic
   const getOwnerName = (epic: Epic): string => {
@@ -61,23 +76,54 @@ export default function EpicsManagement({
     return "Unknown Owner";
   };
 
-  // Helper to get assignee data from epic
-  const getAssignees = (epic: Epic): {name: string; id: string}[] => {
-    if (epic.assignees && Array.isArray(epic.assignees)) {
-      return epic.assignees.map(a => ({
-        name: a.name,
-        id: a._id
-      }));
+  // Simple Task Count Badge Component - Minimal version
+  const TaskCountBadge = ({ epic }: { epic: EpicWithTasks }) => {
+    const taskCount = epic.taskCount || 0;
+    const totalTasks = epic.totalTasks || 0;
+    
+    // Debug log to see what data we're getting
+    console.log(`Epic ${epic.name} - taskCount: ${taskCount}, totalTasks: ${totalTasks}`);
+    
+    // Don't show anything if no tasks
+    if (taskCount === 0 && totalTasks === 0) {
+      return null;
     }
-    if (epic.assigneeIds && Array.isArray(epic.assigneeIds)) {
-      return epic.assigneeIds
-        .map(id => {
-          const employee = employees.find(emp => emp._id === id);
-          return employee ? { name: employee.name, id } : null;
+    
+    // Simple badge - just show the count
+    return (
+      <div className="flex items-center gap-1 mb-2">
+        <div className="px-2 py-0.5 bg-slate-100 border border-slate-300 rounded-lg flex items-center gap-1">
+          <FileText size={10} className="text-slate-600" />
+          <span className="text-xs font-bold text-slate-700">
+            {taskCount > 0 ? taskCount : totalTasks} task{(taskCount > 0 ? taskCount : totalTasks) !== 1 ? 's' : ''}
+          </span>
+        </div>
+      </div>
+    );
+  };
+
+  // Alternative: Fetch task counts separately
+  const fetchTaskCountsForEpics = async (epicIds: string[]) => {
+    try {
+      const counts = await Promise.all(
+        epicIds.map(async (epicId) => {
+          try {
+            const response = await fetch(`/api/tasks/count?epicId=${epicId}`);
+            if (response.ok) {
+              return await response.json();
+            }
+          } catch (err) {
+            console.error(`Failed to fetch task count for epic ${epicId}:`, err);
+          }
+          return { epicId, count: 0 };
         })
-        .filter(Boolean) as {name: string; id: string}[];
+      );
+      
+      return counts;
+    } catch (err) {
+      console.error("Failed to fetch task counts:", err);
+      return [];
     }
-    return [];
   };
 
   const fetchEpics = async (projectId: string) => {
@@ -85,23 +131,120 @@ export default function EpicsManagement({
     
     setLoadingEpics(true);
     try {
+      // First, fetch epics
       const response = await fetch(`/api/epics?projectId=${projectId}`);
-      const data = await response.json();
-      if (response.ok) {
-        setEpics(data);
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
       }
+      const epicsData = await response.json();
+      
+      console.log("Fetched epics:", epicsData);
+      
+      // Option 1: If your backend doesn't include task counts, fetch them separately
+      const epicIds = epicsData.map((epic: Epic) => epic._id);
+      const taskCounts = await fetchTaskCountsForEpics(epicIds);
+      
+      // Add task counts to epics
+      const epicsWithCounts = epicsData.map((epic: Epic) => {
+        const taskCount = taskCounts.find((tc: any) => tc.epicId === epic._id);
+        return {
+          ...epic,
+          taskCount: taskCount?.count || 0
+        };
+      });
+      
+      setEpics(epicsWithCounts);
+      
     } catch (err) {
       console.error("Failed to fetch epics:", err);
+      setMessage("❌ Failed to load epics. Please try again.");
+      setTimeout(() => setMessage(""), 3000);
     } finally {
       setLoadingEpics(false);
     }
   };
 
+  // Alternative: Use a simpler approach - check if tasks exist for each epic
+  const checkEpicHasTasks = async (epicId: string) => {
+    try {
+      const response = await fetch(`/api/tasks?epicId=${epicId}&limit=1`);
+      if (response.ok) {
+        const data = await response.json();
+        return data.length > 0;
+      }
+      return false;
+    } catch (err) {
+      console.error(`Failed to check tasks for epic ${epicId}:`, err);
+      return false;
+    }
+  };
+
+  // Load epics and check for tasks
   useEffect(() => {
     if (selectedProject) {
-      fetchEpics(selectedProject._id);
+      const loadEpicsWithTasks = async () => {
+        setLoadingEpics(true);
+        try {
+          // Fetch epics
+          const response = await fetch(`/api/epics?projectId=${selectedProject._id}`);
+          if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+          
+          const epicsData = await response.json();
+          console.log("Epics data received:", epicsData);
+          
+          // Check each epic for tasks
+          const epicsWithTaskInfo = await Promise.all(
+            epicsData.map(async (epic: Epic) => {
+              try {
+                // Check if tasks exist for this epic
+                const tasksResponse = await fetch(`/api/tasks?epicId=${epic._id}&countOnly=true`);
+                let taskCount = 0;
+                
+                if (tasksResponse.ok) {
+                  const tasksData = await tasksResponse.json();
+                  taskCount = tasksData.count || 0;
+                }
+                
+                return {
+                  ...epic,
+                  taskCount: taskCount
+                };
+              } catch (err) {
+                console.error(`Error checking tasks for epic ${epic._id}:`, err);
+                return {
+                  ...epic,
+                  taskCount: 0
+                };
+              }
+            })
+          );
+          
+          setEpics(epicsWithTaskInfo);
+          console.log("Epics with task counts:", epicsWithTaskInfo);
+          
+        } catch (err) {
+          console.error("Failed to load epics:", err);
+          setMessage("❌ Failed to load epics");
+          setTimeout(() => setMessage(""), 3000);
+        } finally {
+          setLoadingEpics(false);
+        }
+      };
+      
+      loadEpicsWithTasks();
+    } else {
+      setEpics([]);
     }
   }, [selectedProject]);
+
+  // Simple debugging component to show epic data
+  const EpicDebugInfo = ({ epic }: { epic: EpicWithTasks }) => {
+    return (
+      <div className="text-sm font-bold tracking-wide text-gray-400 mt-2 ">
+       Tasks Count: {epic.taskCount || 0}
+      </div>
+    );
+  };
 
   // Close status dropdown when clicking outside
   useEffect(() => {
@@ -132,8 +275,9 @@ export default function EpicsManagement({
       });
 
       if (response.ok) {
+        const updatedEpic = await response.json();
         setEpics(prev => prev.map(e => 
-          e._id === epicId ? { ...e, status: newStatus } : e
+          e._id === epicId ? { ...e, status: updatedEpic.status } : e
         ));
         setMessage(`✅ Epic status updated to ${newStatus}`);
         setTimeout(() => setMessage(""), 3000);
@@ -157,6 +301,13 @@ export default function EpicsManagement({
       return;
     }
 
+    // Validate ownerId is not empty
+    if (!epicFormData.ownerId || epicFormData.ownerId.trim() === "") {
+      setMessage("❌ Please select an epic owner");
+      setTimeout(() => setMessage(""), 3000);
+      return;
+    }
+
     setLoading(true);
     try {
       const epicData = {
@@ -168,20 +319,25 @@ export default function EpicsManagement({
         startDate: epicFormData.startDate,
         endDate: epicFormData.endDate || null,
         ownerId: epicFormData.ownerId,
-        assigneeIds: epicFormData.assigneeIds,
         labels: epicFormData.labels,
         projectId: selectedProject._id,
         projectName: selectedProject.name,
+        projectKey: selectedProject.key,
         createdBy: "user",
       };
 
-      const url = editingEpicId ? `/api/epics/${editingEpicId}` : "/api/epics";
-      const method = editingEpicId ? "PUT" : "POST";
-      
+      let url = "/api/epics";
+      let method = "POST";
+
+      if (editingEpicId) {
+        url = `/api/epics/${editingEpicId}`;
+        method = "PUT";
+      }
+
       const response = await fetch(url, {
         method,
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(editingEpicId ? { _id: editingEpicId, ...epicData } : epicData),
+        body: JSON.stringify(epicData),
       });
 
       const result = await response.json();
@@ -194,17 +350,27 @@ export default function EpicsManagement({
           name: "",
           summary: "",
           description: "",
-          status: "Todo",
+          status: "Not Started",
           priority: "Medium",
           startDate: new Date().toISOString().split('T')[0],
           endDate: "",
           ownerId: employees.length > 0 ? employees[0]._id : "",
-          assigneeIds: [],
           labels: [],
           currentLabel: "",
         });
         
-        await fetchEpics(selectedProject._id);
+        // Refresh the list
+        if (selectedProject) {
+          const loadEpics = async () => {
+            const response = await fetch(`/api/epics?projectId=${selectedProject._id}`);
+            if (response.ok) {
+              const epicsData = await response.json();
+              setEpics(epicsData);
+            }
+          };
+          loadEpics();
+        }
+        
         setShowEpicForm(false);
         setEditingEpicId(null);
       } else {
@@ -220,16 +386,27 @@ export default function EpicsManagement({
   };
 
   const handleEditEpic = (epic: Epic) => {
+    // Try to get ownerId from different possible sources
+    let ownerId = "";
+    
+    if (epic.ownerId) {
+      ownerId = epic.ownerId;
+    } else if (epic.owner && epic.owner._id) {
+      ownerId = epic.owner._id;
+    } else if (employees.length > 0) {
+      // Fallback to first employee if no owner found
+      ownerId = employees[0]._id;
+    }
+
     setEpicFormData({
       name: epic.name,
       summary: epic.summary,
-      description: epic.description,
+      description: epic.description || "",
       status: epic.status,
       priority: epic.priority,
       startDate: epic.startDate.split('T')[0],
       endDate: epic.endDate ? epic.endDate.split('T')[0] : "",
-      ownerId: epic.ownerId || epic.owner?._id || "",
-      assigneeIds: epic.assigneeIds || epic.assignees?.map(a => a._id) || [],
+      ownerId: ownerId,
       labels: epic.labels || [],
       currentLabel: "",
     });
@@ -248,7 +425,17 @@ export default function EpicsManagement({
 
       if (response.ok) {
         setMessage("✅ Epic deleted successfully!");
-        await fetchEpics(selectedProject!._id);
+        // Refresh the list
+        if (selectedProject) {
+          const loadEpics = async () => {
+            const response = await fetch(`/api/epics?projectId=${selectedProject._id}`);
+            if (response.ok) {
+              const epicsData = await response.json();
+              setEpics(epicsData);
+            }
+          };
+          loadEpics();
+        }
       } else {
         const data = await response.json();
         setMessage(`❌ ${data.error || "Failed to delete epic"}`);
@@ -278,31 +465,6 @@ export default function EpicsManagement({
     }));
   };
 
-  const toggleAssignee = (employeeId: string) => {
-    setEpicFormData(prev => {
-      const isAlreadyAssigned = prev.assigneeIds.includes(employeeId);
-      
-      if (isAlreadyAssigned) {
-        return {
-          ...prev,
-          assigneeIds: prev.assigneeIds.filter(id => id !== employeeId)
-        };
-      } else {
-        return {
-          ...prev,
-          assigneeIds: [...prev.assigneeIds, employeeId]
-        };
-      }
-    });
-  };
-
-  const removeAssignee = (assigneeId: string) => {
-    setEpicFormData(prev => ({
-      ...prev,
-      assigneeIds: prev.assigneeIds.filter(id => id !== assigneeId)
-    }));
-  };
-
   // Filter epics
   const filteredEpics = useMemo(() => {
     return epics.filter((epic) => {
@@ -317,7 +479,7 @@ export default function EpicsManagement({
 
       return matchesSearch && matchesStatus && matchesPriority;
     });
-  }, [epics, epicSearchQuery, statusFilter, priorityFilter]);
+  }, [epics, epicSearchQuery, statusFilter, priorityFilter, employees]);
 
   const getPriorityColor = (priority: string) => {
     switch(priority) {
@@ -331,6 +493,7 @@ export default function EpicsManagement({
 
   const getStatusColor = (status: string) => {
     switch(status) {
+      case "Not Started": return "bg-gray-100 text-gray-800";
       case "Done": return "bg-green-100 text-green-800";
       case "In Progress": return "bg-blue-100 text-blue-800";
       case "Review": return "bg-purple-100 text-purple-800";
@@ -341,6 +504,7 @@ export default function EpicsManagement({
 
   const getStatusIcon = (status: string) => {
     switch(status) {
+      case "Not Started": return "⏳";
       case "Done": return "✅";
       case "In Progress": return "🔄";
       case "Review": return "👁️";
@@ -361,6 +525,7 @@ export default function EpicsManagement({
 
   const StatusDropdown = ({ epic }: { epic: Epic }) => {
     const statusOptions: { value: Epic["status"]; label: string; icon: React.ReactNode }[] = [
+      { value: "Not Started", label: "Not Started", icon: <Circle size={12} className="text-gray-500" /> },
       { value: "Todo", label: "Todo", icon: <Circle size={12} className="text-gray-500" /> },
       { value: "In Progress", label: "In Progress", icon: <PlayCircle size={12} className="text-blue-500" /> },
       { value: "Review", label: "Review", icon: <Eye size={12} className="text-purple-500" /> },
@@ -416,12 +581,32 @@ export default function EpicsManagement({
            { _id: "", name: "Select Owner", email: "" };
   };
 
-  // Get current assignees for display
-  const getCurrentAssignees = () => {
-    return epicFormData.assigneeIds
-      .map(id => employees.find(emp => emp._id === id))
-      .filter(Boolean) as Employee[];
-  };
+  // Reset form when showEpicForm changes to false
+  useEffect(() => {
+    if (!showEpicForm) {
+      setEpicFormData({
+        name: "",
+        summary: "",
+        description: "",
+        status: "Not Started",
+        priority: "Medium",
+        startDate: new Date().toISOString().split('T')[0],
+        endDate: "",
+        ownerId: employees.length > 0 ? employees[0]._id : "",
+        labels: [],
+        currentLabel: "",
+      });
+      setEditingEpicId(null);
+    }
+  }, [showEpicForm, employees]);
+
+  // Debug: Log epic data when it changes
+  useEffect(() => {
+    console.log("Epics state updated:", epics);
+    epics.forEach((epic, index) => {
+      console.log(`Epic ${index}: ${epic.name}, Task Count: ${epic.taskCount}`);
+    });
+  }, [epics]);
 
   return (
     <div className="flex flex-col">
@@ -444,12 +629,11 @@ export default function EpicsManagement({
                   name: "",
                   summary: "",
                   description: "",
-                  status: "Todo",
+                  status: "Not Started",
                   priority: "Medium",
                   startDate: new Date().toISOString().split('T')[0],
                   endDate: "",
                   ownerId: employees.length > 0 ? employees[0]._id : "",
-                  assigneeIds: [],
                   labels: [],
                   currentLabel: "",
                 });
@@ -490,6 +674,7 @@ export default function EpicsManagement({
                     className="pl-10 pr-4 py-2 w-full bg-slate-50 border-2 border-slate-100 rounded-xl text-xs font-bold outline-none focus:border-[#3fa87d] focus:bg-white transition-all appearance-none"
                   >
                     <option value="">All Status</option>
+                    <option value="Not Started">Not Started</option>
                     <option value="Todo">Todo</option>
                     <option value="In Progress">In Progress</option>
                     <option value="Review">Review</option>
@@ -552,109 +737,92 @@ export default function EpicsManagement({
                     </button>
                   </div>
                 ) : (
-                  filteredEpics.map((epic) => {
-                    const assignees = getAssignees(epic);
-                    
-                    return (
-                      <div 
-                        key={epic._id} 
-                        className="p-4 border-2 border-slate-200 rounded-2xl hover:border-[#3fa87d]/50 transition-colors group cursor-pointer relative"
-                        onClick={() => onEpicClick(epic)}
-                      >
-                        <div className="flex items-start justify-between mb-2">
-                          <div className="flex items-start gap-3">
-                            {/* Status Dropdown */}
-                            <StatusDropdown epic={epic} />
-                            
-                            {/* Priority Badge */}
-                            <div className={`px-2 py-1 rounded text-[10px] font-black ${getPriorityColor(epic.priority)}`}>
-                              {getPriorityIcon(epic.priority)} {epic.priority}
-                            </div>
-                          </div>
-                          <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleEditEpic(epic);
-                              }}
-                              className="p-1 hover:bg-blue-100 text-blue-600 rounded transition-colors"
-                              title="Edit Epic"
-                            >
-                              <Edit2 size={12} />
-                            </button>
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleDeleteEpic(epic._id);
-                              }}
-                              className="p-1 hover:bg-red-100 text-red-600 rounded transition-colors"
-                              title="Delete Epic"
-                            >
-                              <Trash2 size={12} />
-                            </button>
-                            <ChevronRight size={14} className="text-slate-400 group-hover:text-[#3fa87d]" />
+                  filteredEpics.map((epic) => (
+                    <div 
+                      key={epic._id} 
+                      className="p-4 border-2 border-slate-200 rounded-2xl hover:border-[#3fa87d]/50 transition-colors group cursor-pointer relative"
+                      onClick={() => onEpicClick(epic)}
+                    >
+                      <div className="flex items-start justify-between mb-2">
+                        <div className="flex items-start gap-3">
+                          {/* Status Dropdown */}
+                          <StatusDropdown epic={epic} />
+                          
+                          {/* Priority Badge */}
+                          <div className={`px-2 py-1 rounded text-[10px] font-black ${getPriorityColor(epic.priority)}`}>
+                            {getPriorityIcon(epic.priority)} {epic.priority}
                           </div>
                         </div>
-                        
-                        <h4 className="font-bold text-slate-800 mb-1">{epic.name}</h4>
-                        <p className="text-sm text-slate-600 mb-3 line-clamp-2">{epic.summary}</p>
-                        
-                        {/* Owner Badge */}
-                        <div className="flex items-center gap-1 mb-2">
-                          <span className="text-[10px] font-bold text-slate-500">Owner:</span>
-                          <div className="flex items-center gap-1 px-2 py-1 bg-blue-50 rounded-full">
-                            <div className="w-4 h-4 bg-blue-300 rounded-full flex items-center justify-center text-[8px] font-bold">
-                              {getOwnerName(epic).charAt(0)}
-                            </div>
-                            <span className="text-[10px] font-bold text-blue-700">{getOwnerName(epic)}</span>
-                          </div>
-                        </div>
-                        
-                        {/* Assignees - Scrollable when more than 3 */}
-                        {assignees.length > 0 && (
-                          <div className={`flex gap-1 mb-2 ${assignees.length > 3 ? 'overflow-x-auto pb-2' : 'flex-wrap'}`}>
-                            {assignees.slice(0, assignees.length > 3 ? 10 : 3).map((assignee) => (
-                              <div key={assignee.id} className="flex items-center gap-1 px-2 py-1 bg-slate-100 rounded-full flex-shrink-0">
-                                <div className="w-4 h-4 bg-slate-300 rounded-full flex items-center justify-center text-[8px] font-bold">
-                                  {assignee.name.charAt(0)}
-                                </div>
-                                <span className="text-[10px] font-bold text-slate-700">{assignee.name}</span>
-                              </div>
-                            ))}
-                            {assignees.length > 10 && (
-                              <div className="px-2 py-1 bg-slate-100 rounded-full text-[10px] font-bold text-slate-700 flex-shrink-0">
-                                +{assignees.length - 10}
-                              </div>
-                            )}
-                          </div>
-                        )}
-                        
-                        {/* Labels */}
-                        {epic.labels && epic.labels.length > 0 && (
-                          <div className="flex flex-wrap gap-1 mb-2">
-                            {epic.labels.map((label, index) => (
-                              <div key={index} className="px-2 py-0.5 bg-slate-200 text-slate-700 text-[10px] font-bold rounded-full">
-                                {label}
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                        
-                        <div className="flex items-center justify-between text-xs text-slate-500 mt-3 pt-3 border-t border-slate-100">
-                          <span className="font-mono font-bold">{epic.epicId}</span>
-                          <div className="flex items-center gap-2">
-                            <span className="text-[10px]">{new Date(epic.startDate).toLocaleDateString()}</span>
-                            {epic.endDate && (
-                              <>
-                                <span className="text-[8px]">→</span>
-                                <span className="text-[10px]">{new Date(epic.endDate).toLocaleDateString()}</span>
-                              </>
-                            )}
-                          </div>
+                        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleEditEpic(epic);
+                            }}
+                            className="p-1 hover:bg-blue-100 text-blue-600 rounded transition-colors"
+                            title="Edit Epic"
+                          >
+                            <Edit2 size={12} />
+                          </button>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleDeleteEpic(epic._id);
+                            }}
+                            className="p-1 hover:bg-red-100 text-red-600 rounded transition-colors"
+                            title="Delete Epic"
+                          >
+                            <Trash2 size={12} />
+                          </button>
+                          <ChevronRight size={14} className="text-slate-400 group-hover:text-[#3fa87d]" />
                         </div>
                       </div>
-                    );
-                  })
+                      
+                      <h4 className="font-bold text-slate-800 mb-1">{epic.name}</h4>
+                      <p className="text-sm text-slate-600 mb-3 line-clamp-2">{epic.summary}</p>
+                      
+                      {/* Task Count Badge */}
+                      <TaskCountBadge epic={epic} />
+                      
+                      {/* Owner Badge */}
+                      <div className="flex items-center gap-1 mb-2">
+                        <span className="text-[10px] font-bold text-slate-500">Owner:</span>
+                        <div className="flex items-center gap-1 px-2 py-1 bg-blue-50 rounded-full">
+                          <div className="w-4 h-4 bg-blue-300 rounded-full flex items-center justify-center text-[8px] font-bold">
+                            {getOwnerName(epic).charAt(0)}
+                          </div>
+                          <span className="text-[10px] font-bold text-blue-700">{getOwnerName(epic)}</span>
+                        </div>
+                      </div>
+                      
+                      {/* Labels */}
+                      {epic.labels && epic.labels.length > 0 && (
+                        <div className="flex flex-wrap gap-1 mb-2">
+                          {epic.labels.map((label, index) => (
+                            <div key={index} className="px-2 py-0.5 bg-slate-200 text-slate-700 text-[10px] font-bold rounded-full">
+                              {label}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      
+                      {/* Debug info - remove in production */}
+                      <EpicDebugInfo epic={epic} />
+                      
+                      <div className="flex items-center justify-between text-xs text-slate-500 mt-3 pt-3 border-t border-slate-100">
+                        <span className="font-mono font-bold">{epic.epicId}</span>
+                        <div className="flex items-center gap-2">
+                          <span className="text-[10px]">{new Date(epic.startDate).toLocaleDateString()}</span>
+                          {epic.endDate && (
+                            <>
+                              <span className="text-[8px]">→</span>
+                              <span className="text-[10px]">{new Date(epic.endDate).toLocaleDateString()}</span>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ))
                 )}
               </div>
             </div>
@@ -746,6 +914,7 @@ export default function EpicsManagement({
                         onChange={(e) => setEpicFormData({...epicFormData, status: e.target.value as any})}
                         className="w-full px-3 py-2 bg-slate-50 border-2 border-slate-200 rounded-xl text-sm font-bold outline-none focus:border-[#3fa87d] transition-all"
                       >
+                        <option value="Not Started">Not Started</option>
                         <option value="Todo">Todo</option>
                         <option value="In Progress">In Progress</option>
                         <option value="Review">Review</option>
@@ -811,55 +980,6 @@ export default function EpicsManagement({
                           {getCurrentOwner().name.charAt(0)}
                         </div>
                         <span className="text-sm font-medium text-blue-800">{getCurrentOwner().name}</span>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Multiple Assignees Selection - Scrollable */}
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-black text-slate-500 uppercase">Assignees</label>
-                    <div className="max-h-48 overflow-y-auto p-2 bg-slate-50 border-2 border-slate-200 rounded-xl">
-                      <div className="grid grid-cols-1 gap-2">
-                        {employees.map(emp => (
-                          <div key={emp._id} className="flex items-center gap-3 p-2 hover:bg-slate-100 rounded-lg cursor-pointer">
-                            <button
-                              type="button"
-                              onClick={() => toggleAssignee(emp._id)}
-                              className={`w-5 h-5 rounded border-2 flex items-center justify-center transition-colors ${
-                                epicFormData.assigneeIds.includes(emp._id)
-                                  ? "bg-[#3fa87d] border-[#3fa87d] text-white"
-                                  : "bg-white border-slate-300"
-                              }`}
-                            >
-                              {epicFormData.assigneeIds.includes(emp._id) && <Check size={12} />}
-                            </button>
-                            <div className="flex items-center gap-2">
-                              <div className="w-6 h-6 bg-slate-300 rounded-full flex items-center justify-center text-[10px] font-bold">
-                                {emp.name.charAt(0)}
-                              </div>
-                              <span className="text-sm font-medium text-slate-800">{emp.name}</span>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                    {epicFormData.assigneeIds.length > 0 && (
-                      <div className={`flex gap-2 mt-2 ${epicFormData.assigneeIds.length > 3 ? 'overflow-x-auto pb-2' : 'flex-wrap'}`}>
-                        {getCurrentAssignees().map(assignee => (
-                          <div key={assignee._id} className="flex items-center gap-1 px-3 py-1 bg-slate-100 rounded-full flex-shrink-0">
-                            <div className="w-5 h-5 bg-slate-300 rounded-full flex items-center justify-center text-[10px] font-bold">
-                              {assignee.name.charAt(0)}
-                            </div>
-                            <span className="text-xs font-bold text-slate-700">{assignee.name}</span>
-                            <button
-                              type="button"
-                              onClick={() => removeAssignee(assignee._id)}
-                              className="text-slate-500 hover:text-red-500 ml-1"
-                            >
-                              <X size={12} />
-                            </button>
-                          </div>
-                        ))}
                       </div>
                     )}
                   </div>

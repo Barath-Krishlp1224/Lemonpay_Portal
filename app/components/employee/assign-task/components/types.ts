@@ -26,6 +26,7 @@ export interface Task {
   completion: number;
   status:
     | "Backlog"
+    | "To Do" // Added To Do status
     | "In Progress"
     | "Dev Review"
     | "Deployed in QA"
@@ -37,7 +38,9 @@ export interface Task {
     | "Paused"
     | string;
   remarks?: string;
-  summary?: string; // Add this to fix the missing property error
+  summary?: string; // Main task description
+  title?: string;   // Alternative title field
+  name?: string;    // Alternative name field
   subtasks?: Subtask[];
   department?: "Tech" | "Accounts" | string;
   taskTimeSpent?: string;
@@ -47,6 +50,21 @@ export interface Task {
   createdBy?: string;
   createdAt?: string;
   updatedAt?: string;
+  
+  // Additional fields that might come from API
+  epicId?: string;
+  sprintId?: string;
+  labels?: string[];
+  currentLabel?: string;
+  duration?: number;
+  reporterIds?: string[];
+  reporterNames?: string[];
+  epicName?: string;
+  projectName?: string;
+  projectKey?: string;
+  
+  // Helper property for display
+  displayName?: string;
 }
 
 export interface Employee {

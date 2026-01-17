@@ -3,27 +3,27 @@ import connectDB from '@/lib/mongodb';
 import Project from '@/models/Project';
 import mongoose from 'mongoose';
 
-// Define the type for the params promise
-type RouteParams = Promise<{ id: string; employeeId: string }>;
+// Define the type for the params promise - use projectId instead of id
+type RouteParams = Promise<{ projectId: string; employeeId: string }>;
 
 export async function DELETE(
   request: NextRequest,
-  { params }: { params: RouteParams } // Params is now a Promise
+  { params }: { params: RouteParams }
 ) {
   try {
     await connectDB();
     
-    // 1. Await the params to get the IDs
-    const { id, employeeId } = await params;
+    // Await the params to get the IDs
+    const { projectId, employeeId } = await params;
     
-    if (!mongoose.Types.ObjectId.isValid(id)) {
+    if (!mongoose.Types.ObjectId.isValid(projectId)) {
       return NextResponse.json(
         { error: 'Invalid project ID' },
         { status: 400 }
       );
     }
     
-    const project = await Project.findById(id);
+    const project = await Project.findById(projectId);
     if (!project) {
       return NextResponse.json(
         { error: 'Project not found' },
@@ -31,12 +31,12 @@ export async function DELETE(
       );
     }
     
-    // 2. Remove from assigneeIds array
+    // Remove from assigneeIds array
     project.assigneeIds = project.assigneeIds?.filter((aId: any) => 
       aId.toString() !== employeeId
     ) || [];
     
-    // 3. Remove from members array (except if they are the owner)
+    // Remove from members array (except if they are the owner)
     project.members = project.members?.filter((member: any) => {
       // Don't remove if this is the owner
       if (project.ownerId?.toString() === employeeId) {
@@ -57,4 +57,4 @@ export async function DELETE(
       { status: 500 }
     );
   }
-} 
+}

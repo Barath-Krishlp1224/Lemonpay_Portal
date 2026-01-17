@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useState, useMemo } from "react";
+import React, { useCallback, useState, useMemo, useEffect } from "react";
 import {
   X,
   Edit2,
@@ -18,7 +18,11 @@ import {
   Loader2,
   Play,
   Lock,
-  Unlock
+  Unlock,
+  FolderTree,
+  Layers,
+  Briefcase,
+  ListTree
 } from "lucide-react";
 import {
   Task,
@@ -66,20 +70,60 @@ const sumAllSubtasksStoryPoints = (subtasks: Subtask[] | undefined | null): numb
 
 // --- Status Color Logic (Backgrounds only, Text is Black) ---
 const getStatusBgColor = (status: string = "") => {
-  switch (status) {
-    case "Completed":
+  switch (status.toLowerCase()) {
+    case "completed":
+    case "done":
       return "bg-emerald-200 border-emerald-300";
-    case "In Progress":
+    case "in progress":
       return "bg-blue-200 border-blue-300";
-    case "To Do":
+    case "to do":
+    case "todo":
       return "bg-slate-200 border-slate-300";
-    case "Paused":
+    case "paused":
       return "bg-amber-200 border-amber-300";
-    case "Backlog":
+    case "backlog":
       return "bg-purple-200 border-purple-300";
     default:
       return "bg-slate-100 border-slate-200";
   }
+};
+
+// --- Get Subtask Progress with Fallback ---
+const getSubtaskProgress = (subtask: Subtask): number => {
+  // Check if progress property exists
+  if ('progress' in subtask && subtask.progress !== undefined) {
+    return Number(subtask.progress) || 0;
+  }
+  
+  // Fallback: Calculate progress based on status
+  switch (subtask.status?.toLowerCase()) {
+    case "completed":
+    case "done":
+      return 100;
+    case "in progress":
+      return 50;
+    case "paused":
+      return 25;
+    case "to do":
+    case "todo":
+    default:
+      return 0;
+  }
+};
+
+// --- Check if user can edit specific subtask ---
+const canUserEditSubtask = (subtask: Subtask, currentUser: { name: string; role: string; id: string }): boolean => {
+  if (currentUser.role === "Admin" || currentUser.role === "Manager") return true;
+  
+  if (currentUser.role === "Employee") {
+    // Employee can edit subtask if:
+    // 1. They are assigned to it, OR
+    // 2. Subtask has no assignee (unassigned)
+    if (!subtask.assigneeName) return true; // Unassigned subtasks can be edited by any employee
+    return subtask.assigneeName.toLowerCase() === currentUser.name.toLowerCase();
+  }
+  
+  return false;
 };
 
 // --- Sub-Components ---
@@ -111,57 +155,137 @@ const DueDateReminder: React.FC<{ dueDate?: string | null; endDate?: string | nu
 const SubtaskViewer: React.FC<{
   subtasks: Subtask[];
   level: number;
-  handleSubtaskStatusChange: (subId: string | null, newStatus: string) => void;
+  handleSubtaskStatusChange: (subId: string | null, newStatus: string, canEdit: boolean) => void;
   onView: (subtask: Subtask) => void;
-  canEdit: boolean;
-}> = ({ subtasks, level, handleSubtaskStatusChange, onView, canEdit }) => {
+  currentUser: { name: string; role: string; id: string };
+}> = ({ subtasks, level, handleSubtaskStatusChange, onView, currentUser }) => {
   if (!subtasks || subtasks.length === 0) return null;
   
   return (
     <ul className={`space-y-3 ${level > 0 ? "mt-3 border-l-2 border-slate-200 ml-4 pl-4" : ""}`}>
-      {subtasks.map((sub, i) => (
-        <li key={sub.id || i} className="p-4 bg-white rounded-xl border border-slate-100 shadow-sm hover:border-blue-200 transition-all">
-          <div className="flex justify-between items-start">
-            <div className="flex items-center gap-2">
-              <span className="text-[10px] font-black bg-blue-50 text-blue-600 px-2 py-0.5 rounded uppercase">{sub.id ?? "SUB"}</span>
-              <p className="font-bold text-black">{sub.title}</p>
-              {sub.assigneeName && (
-                <div className="flex items-center gap-1 ml-2">
-                  <User size={12} className="text-slate-400" />
-                  <span className="text-xs text-slate-600">{sub.assigneeName}</span>
-                </div>
-              )}
-            </div>
-            <div className="flex items-center gap-3">
-              {canEdit ? (
-                <select
-                  value={sub.status || "To Do"}
-                  onChange={(e) => sub.id && handleSubtaskStatusChange(sub.id, e.target.value)}
-                  className={`text-xs font-black border rounded-lg px-2 py-1 outline-none cursor-pointer text-black ${getStatusBgColor(sub.status)}`}
-                >
-                  {["To Do", "In Progress", "Completed", "Paused"].map(s => 
-                    <option key={s} value={s} className="bg-white text-black">{s}</option>
+      {subtasks.map((sub, i) => {
+        // Safely get progress with fallback
+        const progress = getSubtaskProgress(sub);
+        const subStatus = sub.status || "To Do";
+        const subTitle = sub.title || "Untitled Subtask";
+        const subAssignee = sub.assigneeName || "";
+        
+        // Check if current user can edit this specific subtask
+        const canEditThisSubtask = canUserEditSubtask(sub, currentUser);
+        
+        return (
+          <li key={sub.id || i} className="p-4 bg-white rounded-xl border border-slate-100 shadow-sm hover:border-blue-200 transition-all">
+            <div className="grid grid-cols-12 gap-4 items-center">
+              {/* Title Column (4 cols) */}
+              <div className="col-span-4">
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="text-[10px] font-black bg-blue-50 text-blue-600 px-2 py-0.5 rounded uppercase">
+                    {sub.id || `SUB-${i + 1}`}
+                  </span>
+                  <p className="font-bold text-black text-sm truncate" title={subTitle}>
+                    {subTitle}
+                  </p>
+                  {!canEditThisSubtask && subAssignee && (
+                    <Lock size={12} className="text-slate-400 ml-auto" />
                   )}
-                </select>
-              ) : (
-                <span className={`text-xs font-black border rounded-lg px-2 py-1 ${getStatusBgColor(sub.status)}`}>
-                  {sub.status}
-                </span>
-              )}
-              <button onClick={() => onView(sub)} className="p-1.5 text-slate-400 hover:text-blue-600 rounded-lg"><Eye size={16} /></button>
+                </div>
+                {subAssignee && (
+                  <div className="flex items-center gap-1 text-xs text-slate-600">
+                    <User size={10} className="text-slate-400" />
+                    <span>{subAssignee}</span>
+                    {subAssignee.toLowerCase() === currentUser.name.toLowerCase() && (
+                      <span className="text-[10px] bg-blue-100 text-blue-600 px-1.5 py-0.5 rounded ml-1">
+                        You
+                      </span>
+                    )}
+                  </div>
+                )}
+              </div>
+              
+              {/* Status Column (3 cols) */}
+              <div className="col-span-2">
+                {canEditThisSubtask ? (
+                  <select
+                    value={subStatus}
+                    onChange={(e) => sub.id && handleSubtaskStatusChange(sub.id, e.target.value, true)}
+                    className={`w-full text-xs font-black border rounded-lg px-2 py-1.5 outline-none cursor-pointer text-black ${getStatusBgColor(subStatus)}`}
+                  >
+                    {["To Do", "In Progress", "Completed", "Paused"].map(s => 
+                      <option key={s} value={s} className="bg-white text-black">{s}</option>
+                    )}
+                  </select>
+                ) : (
+                  <div className="relative">
+                    <span className={`inline-block w-full text-xs font-black border rounded-lg px-2 py-1.5 text-center ${getStatusBgColor(subStatus)}`}>
+                      {subStatus}
+                    </span>
+                    {!canEditThisSubtask && (
+                      <div className="absolute -top-1 -right-1">
+                        <Lock size={10} className="text-slate-400" />
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+              
+              {/* Progress Column (4 cols) */}
+              <div className="col-span-4">
+                <div className="space-y-1">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] text-slate-500">Progress</span>
+                    <span className={`text-xs font-bold ${
+                      progress === 100 ? 'text-emerald-600' : 
+                      progress >= 70 ? 'text-blue-600' : 
+                      progress >= 30 ? 'text-amber-600' : 'text-rose-600'
+                    }`}>
+                      {progress}%
+                    </span>
+                  </div>
+                  <div className="w-full bg-slate-200 h-2 rounded-full overflow-hidden">
+                    <div 
+                      className={`h-full ${
+                        progress === 100 ? 'bg-emerald-500' : 
+                        progress >= 70 ? 'bg-blue-500' : 
+                        progress >= 30 ? 'bg-amber-500' : 'bg-rose-500'
+                      }`}
+                      style={{ width: `${progress}%` }}
+                    />
+                  </div>
+                  {sub.timeSpent && (
+                    <div className="text-[10px] text-slate-500 font-medium mt-1">
+                      Time spent: {typeof sub.timeSpent === 'number' ? sub.timeSpent : parseFloat(sub.timeSpent as string) || 0} hours
+                    </div>
+                  )}
+                </div>
+              </div>
+              
+              {/* Actions Column (1 col) */}
+              <div className="col-span-1 flex justify-end">
+                <button 
+                  onClick={() => onView(sub)} 
+                  className="p-1.5 text-slate-400 hover:text-blue-600 rounded-lg hover:bg-blue-50 transition-colors"
+                  title="View details"
+                >
+                  <Eye size={16} />
+                </button>
+              </div>
             </div>
-          </div>
-          {sub.subtasks && sub.subtasks.length > 0 && (
-            <SubtaskViewer 
-              subtasks={sub.subtasks} 
-              level={level + 1} 
-              handleSubtaskStatusChange={handleSubtaskStatusChange} 
-              onView={onView} 
-              canEdit={canEdit}
-            />
-          )}
-        </li>
-      ))}
+            
+            {/* Nested subtasks - Always visible to all users */}
+            {sub.subtasks && sub.subtasks.length > 0 && (
+              <div className="mt-4">
+                <SubtaskViewer 
+                  subtasks={sub.subtasks} 
+                  level={level + 1} 
+                  handleSubtaskStatusChange={handleSubtaskStatusChange} 
+                  onView={onView} 
+                  currentUser={currentUser}
+                />
+              </div>
+            )}
+          </li>
+        );
+      })}
     </ul>
   );
 };
@@ -207,11 +331,7 @@ const TaskModal: React.FC<TaskModalProps> = (props) => {
   } = props;
 
   const [selectedSubtask, setSelectedSubtask] = useState<Subtask | null>(null);
-  const subtasksToDisplay = isEditing ? subtasks : (task.subtasks || []);
-  const totalTime = useMemo(() => sumAllSubtasksTime(subtasksToDisplay), [subtasksToDisplay]);
-  const totalPoints = useMemo(() => sumAllSubtasksStoryPoints(subtasksToDisplay), [subtasksToDisplay]);
-  const current = isEditing ? draftTask : task;
-
+  
   // Get current user info from localStorage if not provided
   const currentUser = useMemo(() => {
     if (typeof window !== "undefined") {
@@ -224,12 +344,47 @@ const TaskModal: React.FC<TaskModalProps> = (props) => {
     return { name: "", id: "", role: "Employee" };
   }, [currentUserName, currentUserId, currentUserRole]);
 
-  // Check if current user can edit this task
+  // Debug logging
+  useEffect(() => {
+    if (isOpen) {
+      console.log('TaskModal opened:', {
+        taskId: task._id,
+        taskSubtasks: task.subtasks,
+        subtasksProp: subtasks,
+        isEditing,
+        currentUser,
+        currentUserName: currentUser.name
+      });
+    }
+  }, [isOpen, task, subtasks, isEditing, currentUser]);
+
+  // Use subtasks from props if editing, otherwise from task
+  const subtasksToDisplay = isEditing ? subtasks : (task.subtasks || []);
+  
+  const totalTime = useMemo(() => sumAllSubtasksTime(subtasksToDisplay), [subtasksToDisplay]);
+  const totalPoints = useMemo(() => sumAllSubtasksStoryPoints(subtasksToDisplay), [subtasksToDisplay]);
+  const current = isEditing ? draftTask : task;
+
+  // Get task display name - using summary, title, name, or fallback to taskId
+  const taskDisplayName = task.displayName || 
+                         task.summary || 
+                         task.title || 
+                         task.name || 
+                         `Task ${task.taskId || task._id?.substring(0, 8)}`;
+
+  // Get epic name - prefer epicName, then fallback to project name
+  const epicName = task.epicName || task.projectName || 'Epic not specified';
+
+  // Check if current user can edit this task (Admin/Manager always can)
   const canEditTask = useMemo(() => {
     if (currentUser.role === "Admin" || currentUser.role === "Manager") return true;
     
     if (currentUser.role === "Employee") {
-      // Check if task is assigned to current user by name
+      // Employees can edit task if:
+      // 1. Task is assigned to them, OR
+      // 2. Task has no assignees (unassigned)
+      if (!task.assigneeNames || task.assigneeNames.length === 0) return true;
+      
       const isAssigned = task.assigneeNames?.some(
         name => name.toLowerCase() === currentUser.name.toLowerCase()
       );
@@ -240,24 +395,28 @@ const TaskModal: React.FC<TaskModalProps> = (props) => {
     return false;
   }, [task, currentUser]);
 
-  // Check if user can edit subtasks (employees can edit their own subtasks)
+  // Check if user can edit subtasks in general (for the "Edit Subtasks" button)
   const canEditSubtasks = useMemo(() => {
     if (currentUser.role === "Admin" || currentUser.role === "Manager") return true;
     
     if (currentUser.role === "Employee") {
-      // Employees can edit subtasks that are assigned to them
+      // Employees can edit subtasks if:
+      // 1. They can edit the task itself, OR
+      // 2. There are subtasks assigned to them
+      if (canEditTask) return true;
+      
       const hasAssignedSubtasks = task.subtasks?.some(
-        sub => sub.assigneeName?.toLowerCase() === currentUser.name.toLowerCase()
+        sub => canUserEditSubtask(sub, currentUser)
       );
       
-      return hasAssignedSubtasks || canEditTask;
+      return hasAssignedSubtasks;
     }
     
     return false;
   }, [task, currentUser, canEditTask]);
 
-  const handleSubtaskStatusChange = useCallback((subtaskId: string | null, newStatus: string) => {
-    if (subtaskId) {
+  const handleSubtaskStatusChange = useCallback((subtaskId: string | null, newStatus: string, canEdit: boolean) => {
+    if (subtaskId && canEdit) {
       onSubtaskStatusChange(task._id, subtaskId, newStatus);
     }
   }, [task._id, onSubtaskStatusChange]);
@@ -269,25 +428,46 @@ const TaskModal: React.FC<TaskModalProps> = (props) => {
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-md" onClick={onClose}>
       <div className="bg-white rounded-[3rem] shadow-2xl flex flex-col w-full max-w-7xl max-h-[80vh] mt-20 overflow-hidden" onClick={e => e.stopPropagation()}>
         
-        {/* Header with permission indicator */}
+        {/* Header with epic name */}
         <div className="p-8 border-b border-slate-100 flex justify-between items-center bg-white">
-          <div>
-            <span className="text-blue-500 text-[11px] font-[1000] uppercase tracking-[0.4em] mb-1 block">
-              {task.taskId}
-            </span>
+          <div className="space-y-3">
+            {/* Epic Name Section */}
             <div className="flex items-center gap-3">
-              <h2 className="text-4xl font-[1000] text-slate-900 tracking-tighter uppercase">
-                {task.project || "No Project Specified"}
-              </h2>
-              {!canEditTask && (
-                <div className="flex items-center gap-1 bg-slate-100 px-3 py-1 rounded-full">
-                  <Lock size={14} className="text-slate-400" />
-                  <span className="text-xs font-bold text-slate-500">View Only</span>
-                </div>
-              )}
+              <div className="bg-gradient-to-br from-purple-100 to-blue-100 p-3 rounded-2xl">
+                <FolderTree className="w-6 h-6 text-purple-600" />
+              </div>
+              <div>
+                <span className="text-[11px] font-black text-purple-600 uppercase tracking-[0.4em] block">
+                  EPIC
+                </span>
+                <h2 className="text-3xl font-black text-slate-900 tracking-tighter">
+                  {epicName}
+                </h2>
+              </div>
+            </div>
+            
+            {/* Task ID and Name */}
+            <div className="flex items-center gap-4">
+              <span className="text-xs font-black bg-slate-100 text-slate-600 px-3 py-1.5 rounded-full uppercase tracking-wider">
+                {task.taskId || `TASK-${task._id?.substring(0, 6)}`}
+              </span>
+              <div className="text-sm font-bold text-slate-700 max-w-xl truncate">
+                {taskDisplayName}
+              </div>
             </div>
           </div>
-          <button onClick={onClose} className="p-3 hover:bg-slate-100 rounded-full text-slate-400"><X /></button>
+          
+          <div className="flex flex-col items-end gap-2">
+            {!canEditTask && (
+              <div className="flex items-center gap-1 bg-slate-100 px-3 py-1.5 rounded-full">
+                <Lock size={14} className="text-slate-400" />
+                <span className="text-xs font-bold text-slate-500">View Only</span>
+              </div>
+            )}
+            <button onClick={onClose} className="p-3 hover:bg-slate-100 rounded-full text-slate-400 transition-colors">
+              <X size={20} />
+            </button>
+          </div>
         </div>
 
         <div className="flex-1 overflow-y-auto p-10 bg-slate-50/30">
@@ -297,7 +477,7 @@ const TaskModal: React.FC<TaskModalProps> = (props) => {
           <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-10">
             {[
               { label: "Logged Effort", val: `${totalTime} hrs`, icon: <Clock className="text-blue-500"/> },
-              { label: "Complexity", val: `${totalPoints} SP`, icon: <BarChart3 className="text-purple-500"/> },
+              { label: "Story Points", val: `${task.taskStoryPoints || 0} SP`, icon: <BarChart3 className="text-purple-500"/> },
               { label: "Progress", val: `${current.completion || 0}%`, icon: <CheckCircle2 className="text-emerald-500"/> },
               { label: "Current State", val: current.status || "Backlog", icon: <AlertCircle className="text-orange-500"/> }
             ].map((s, i) => (
@@ -315,7 +495,7 @@ const TaskModal: React.FC<TaskModalProps> = (props) => {
             {/* Multi-Column Specification Section */}
             <div className="bg-white p-10 rounded-[3rem] border border-slate-100 shadow-sm">
               <div className="flex items-center justify-between mb-8 pb-4 border-b">
-                <h3 className="text-xs font-black text-slate-800 uppercase tracking-[0.2em]">Core Specifications</h3>
+                <h3 className="text-xs font-black text-slate-800 uppercase tracking-[0.2em]">Task Details</h3>
                 {!canEditTask && (
                   <div className="flex items-center gap-1 text-slate-400">
                     <Eye size={14} />
@@ -325,43 +505,69 @@ const TaskModal: React.FC<TaskModalProps> = (props) => {
               </div>
               
               <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-8">
-                {/* 1. Project/Task Name */}
+                {/* 1. Task Name */}
                 <div className="space-y-2">
-                  <label className="text-[10px] font-black text-slate-400 uppercase">Task Identity</label>
+                  <label className="text-[10px] font-black text-slate-400 uppercase flex items-center gap-1">
+                    <Layers size={10} />
+                    Task Name
+                  </label>
                   {isEditing ? (
-                    <input name="project" placeholder="Enter project name..." value={current.project || ""} onChange={handleDraftChange} className="w-full p-4 bg-slate-50 rounded-2xl font-bold border-none focus:ring-2 ring-blue-500 outline-none text-sm text-black placeholder:text-slate-500" />
-                  ) : <p className="p-4 bg-slate-50 rounded-2xl font-bold text-black text-sm truncate">{task.project || 'N/A'}</p>}
+                    <input 
+                      name="summary" 
+                      placeholder="Enter task name..." 
+                      value={current.summary || ""} 
+                      onChange={handleDraftChange} 
+                      className="w-full p-4 bg-slate-50 rounded-2xl font-bold border-none focus:ring-2 ring-blue-500 outline-none text-sm text-black placeholder:text-slate-500" 
+                    />
+                  ) : (
+                    <div className="p-4 bg-slate-50 rounded-2xl font-bold text-black text-sm min-h-[60px]">
+                      {taskDisplayName}
+                    </div>
+                  )}
                 </div>
 
                 {/* 2. Assignee */}
                 <div className="space-y-2">
-                  <label className="text-[10px] font-black text-slate-400 uppercase">Primary Lead</label>
+                  <label className="text-[10px] font-black text-slate-400 uppercase flex items-center gap-1">
+                    <User size={10} />
+                    Primary Lead
+                  </label>
                   {isEditing ? (
-                    <select name="assigneeNames" value={current.assigneeNames?.[0] || ""} onChange={handleDraftChange} className="w-full p-4 bg-slate-50 rounded-2xl font-bold border-none focus:ring-2 ring-blue-500 outline-none text-sm text-black">
+                    <select 
+                      name="assigneeNames" 
+                      value={current.assigneeNames?.[0] || ""} 
+                      onChange={handleDraftChange} 
+                      className="w-full p-4 bg-slate-50 rounded-2xl font-bold border-none focus:ring-2 ring-blue-500 outline-none text-sm text-black"
+                    >
                       <option value="" className="text-slate-500 italic">Unassigned</option>
                       {employees.map(e => <option key={e._id} value={e.name} className="text-black">{e.name}</option>)}
                     </select>
                   ) : (
-                    <div className="p-4 bg-slate-50 rounded-2xl">
+                    <div className="p-4 bg-slate-50 rounded-2xl min-h-[60px]">
                       <div className="flex flex-wrap gap-2">
                         {task.assigneeNames && task.assigneeNames.length > 0 ? (
                           task.assigneeNames.map((name, idx) => (
-                            <div key={idx} className="flex items-center gap-1 bg-white px-2 py-1 rounded-lg">
-                              <div className="w-6 h-6 bg-blue-100 rounded-full flex items-center justify-center text-xs font-bold text-blue-600">
-                                {name.charAt(0)}
+                            <div key={idx} className="flex items-center gap-1 bg-white px-3 py-2 rounded-lg border border-slate-200">
+                              <div className="w-8 h-8 bg-gradient-to-br from-blue-100 to-blue-50 rounded-full flex items-center justify-center text-xs font-bold text-blue-600 border border-blue-200">
+                                {name.charAt(0).toUpperCase()}
                               </div>
-                              <span className="text-sm font-bold text-black">{name}</span>
+                              <div>
+                                <span className="text-sm font-bold text-black">{name}</span>
+                                <div className="text-[10px] text-slate-400">Assignee</div>
+                              </div>
                             </div>
                           ))
                         ) : (
-                          <span className="text-slate-500 italic">Unassigned</span>
+                          <div className="w-full h-full flex items-center justify-center">
+                            <span className="text-slate-500 italic">Unassigned</span>
+                          </div>
                         )}
                       </div>
                     </div>
                   )}
                 </div>
 
-                {/* 3. Status - Dynamically colored Background, Black Text */}
+                {/* 3. Status */}
                 <div className="space-y-2">
                   <label className="text-[10px] font-black text-slate-400 uppercase">Workflow</label>
                   {canEditTask ? (
@@ -374,7 +580,7 @@ const TaskModal: React.FC<TaskModalProps> = (props) => {
                       {allTaskStatuses.map(s => <option key={s} value={s} className="bg-white text-black font-bold">{s}</option>)}
                     </select>
                   ) : (
-                    <div className={`p-4 rounded-2xl font-black text-sm text-black transition-all ${getStatusBgColor(current.status)}`}>
+                    <div className={`p-4 rounded-2xl font-black text-sm text-black transition-all min-h-[60px] flex items-center ${getStatusBgColor(current.status)}`}>
                       {current.status}
                     </div>
                   )}
@@ -382,34 +588,105 @@ const TaskModal: React.FC<TaskModalProps> = (props) => {
 
                 {/* 4. Dates */}
                 <div className="space-y-2">
-                  <label className="text-[10px] font-black text-slate-400 uppercase">Deadline</label>
+                  <label className="text-[10px] font-black text-slate-400 uppercase flex items-center gap-1">
+                    <Calendar size={10} />
+                    Deadline
+                  </label>
                   {isEditing ? (
-                    <input type="date" name="dueDate" value={current.dueDate || ""} onChange={handleDraftChange} className="w-full p-4 bg-slate-50 rounded-2xl font-bold border-none focus:ring-2 ring-blue-500 outline-none text-sm text-black" />
-                  ) : <p className="p-4 bg-slate-50 rounded-2xl font-bold text-black text-sm">{task.dueDate ? new Date(task.dueDate).toLocaleDateString() : 'N/A'}</p>}
+                    <input 
+                      type="date" 
+                      name="dueDate" 
+                      value={current.dueDate || ""} 
+                      onChange={handleDraftChange} 
+                      className="w-full p-4 bg-slate-50 rounded-2xl font-bold border-none focus:ring-2 ring-blue-500 outline-none text-sm text-black" 
+                    />
+                  ) : (
+                    <div className="p-4 bg-slate-50 rounded-2xl font-bold text-black text-sm min-h-[60px]">
+                      {task.dueDate ? (
+                        <div>
+                          <div>{new Date(task.dueDate).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })}</div>
+                          <div className="text-xs text-slate-500 mt-1">
+                            {calculateDaysDiff(task.dueDate) !== null && (
+                              <span className={calculateDaysDiff(task.dueDate)! < 0 ? 'text-red-600' : 'text-green-600'}>
+                                {calculateDaysDiff(task.dueDate)! < 0 
+                                  ? `${Math.abs(calculateDaysDiff(task.dueDate)!)} days overdue`
+                                  : `${calculateDaysDiff(task.dueDate)} days remaining`
+                                }
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      ) : 'No deadline set'}
+                    </div>
+                  )}
                 </div>
 
                 {/* 5. Progress */}
                 <div className="space-y-2">
                   <label className="text-[10px] font-black text-slate-400 uppercase">Completion</label>
                   {isEditing ? (
-                    <input type="number" name="completion" placeholder="0" value={current.completion || 0} onChange={handleDraftChange} className="w-full p-4 bg-slate-50 rounded-2xl font-bold border-none focus:ring-2 ring-blue-500 outline-none text-sm text-black placeholder:text-slate-500" />
-                  ) : <p className="p-4 bg-slate-50 rounded-2xl font-bold text-black text-sm">{task.completion || 0}%</p>}
+                    <input 
+                      type="number" 
+                      name="completion" 
+                      placeholder="0" 
+                      value={current.completion || 0} 
+                      onChange={handleDraftChange} 
+                      className="w-full p-4 bg-slate-50 rounded-2xl font-bold border-none focus:ring-2 ring-blue-500 outline-none text-sm text-black placeholder:text-slate-500" 
+                      min="0"
+                      max="100"
+                    />
+                  ) : (
+                    <div className="p-4 bg-slate-50 rounded-2xl font-bold text-black text-sm min-h-[60px]">
+                      <div className="flex items-center justify-between mb-1">
+                        <span>Progress</span>
+                        <span className={`font-black ${task.completion === 100 ? 'text-emerald-600' : task.completion >= 70 ? 'text-blue-600' : task.completion >= 30 ? 'text-amber-600' : 'text-rose-600'}`}>
+                          {task.completion || 0}%
+                        </span>
+                      </div>
+                      <div className="w-full bg-slate-200 h-2 rounded-full overflow-hidden">
+                        <div 
+                          className={`h-full ${task.completion === 100 ? 'bg-emerald-500' : task.completion >= 70 ? 'bg-blue-500' : task.completion >= 30 ? 'bg-amber-500' : 'bg-rose-500'}`}
+                          style={{ width: `${task.completion || 0}%` }}
+                        />
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
 
               {/* Remarks */}
               <div className="mt-8 space-y-2">
-                  <label className="text-[10px] font-black text-slate-400 uppercase">Strategic Remarks</label>
+                  <label className="text-[10px] font-black text-slate-400 uppercase flex items-center gap-1">
+                    <Briefcase size={10} />
+                    Remarks & Notes
+                  </label>
                   {isEditing ? (
-                    <textarea name="remarks" placeholder="Add detailed notes here..." value={current.remarks || ""} onChange={handleDraftChange} rows={3} className="w-full p-5 bg-slate-50 rounded-2xl font-bold border-none focus:ring-2 ring-blue-500 outline-none resize-none text-sm text-black placeholder:text-slate-500" />
-                  ) : <p className="p-5 bg-slate-50 rounded-2xl font-bold text-black leading-relaxed text-sm">{task.remarks || 'No specific instructions provided.'}</p>}
+                    <textarea 
+                      name="remarks" 
+                      placeholder="Add detailed notes here..." 
+                      value={current.remarks || ""} 
+                      onChange={handleDraftChange} 
+                      rows={3} 
+                      className="w-full p-5 bg-slate-50 rounded-2xl font-bold border-none focus:ring-2 ring-blue-500 outline-none resize-none text-sm text-black placeholder:text-slate-500" 
+                    />
+                  ) : (
+                    <div className="p-5 bg-slate-50 rounded-2xl font-bold text-black leading-relaxed text-sm min-h-[80px]">
+                      {task.remarks || 'No specific instructions provided.'}
+                    </div>
+                  )}
               </div>
             </div>
 
-            {/* Subtasks Section */}
+            {/* Subtasks Section - ALWAYS VISIBLE TO ALL USERS */}
             <div className="space-y-6">
               <div className="flex items-center justify-between px-2">
-                <h3 className="text-xs font-black text-slate-800 uppercase tracking-[0.2em]">Work Breakdown Structure</h3>
+                <div className="flex items-center gap-2">
+                  <ListTree className="w-4 h-4 text-slate-400" />
+                  <h3 className="text-xs font-black text-slate-800 uppercase tracking-[0.2em]">Work Breakdown Structure</h3>
+                  <div className="text-xs text-slate-400">
+                    ({subtasksToDisplay?.length || 0} subtasks)
+                  </div>
+                </div>
                 {canEditSubtasks && !isEditing && (
                   <button 
                     onClick={() => handleEdit(task)} 
@@ -444,13 +721,50 @@ const TaskModal: React.FC<TaskModalProps> = (props) => {
                 )
               ) : (
                 <div className="bg-white p-6 rounded-[2rem] border border-slate-100 shadow-sm">
-                  <SubtaskViewer 
-                    subtasks={task.subtasks || []} 
-                    level={0} 
-                    handleSubtaskStatusChange={handleSubtaskStatusChange} 
-                    onView={setSelectedSubtask}
-                    canEdit={canEditSubtasks}
-                  />
+                  {subtasksToDisplay && subtasksToDisplay.length > 0 ? (
+                    <>
+                      <div className="mb-4 p-3 bg-slate-50 rounded-lg border border-slate-200">
+                        <div className="flex items-center justify-between text-xs">
+                          <div className="text-slate-500">
+                            Subtasks are visible to all team members. Only assignees can modify their own subtasks.
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <div className="flex items-center gap-1">
+                              <Lock size={10} className="text-slate-400" />
+                              <span className="text-[10px] text-slate-500">Locked</span>
+                            </div>
+                            <div className="flex items-center gap-1">
+                              <Unlock size={10} className="text-blue-400" />
+                              <span className="text-[10px] text-blue-500">Editable</span>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                      <SubtaskViewer 
+                        subtasks={subtasksToDisplay} 
+                        level={0} 
+                        handleSubtaskStatusChange={handleSubtaskStatusChange} 
+                        onView={setSelectedSubtask}
+                        currentUser={currentUser}
+                      />
+                    </>
+                  ) : (
+                    <div className="text-center py-10">
+                      <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                        <ListTree className="w-8 h-8 text-slate-400" />
+                      </div>
+                      <p className="text-slate-500 font-medium">No subtasks defined</p>
+                      <p className="text-slate-400 text-sm mt-1">Add subtasks to break down the work</p>
+                      {canEditSubtasks && (
+                        <button 
+                          onClick={() => handleEdit(task)} 
+                          className="mt-4 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-bold hover:bg-blue-700 transition-colors"
+                        >
+                          + Add Subtasks
+                        </button>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
             </div>

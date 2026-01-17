@@ -4,10 +4,12 @@ import {
   ListChecks,
   UserCheck,
   ClipboardCheck,
+  CalendarDays, // Added for Sprints
   LucideIcon
 } from "lucide-react";
 
-export type ActiveView = "CREATE_TASK" | "VIEW_ALL_TASKS" | "MY_TASKS" | "LEAVE_APPROVAL";
+// Update ActiveView type to include SPRINTS
+export type ActiveView = "CREATE_TASK" | "SPRINTS" | "VIEW_ALL_TASKS" | "MY_TASKS" | "LEAVE_APPROVAL";
 
 export interface SidebarItem {
   id: ActiveView;
@@ -20,11 +22,17 @@ interface SidebarProps {
   setActiveView: (view: ActiveView) => void;
 }
 
+// Add SPRINTS as the second item in the array
 export const sidebarItems: SidebarItem[] = [
   {
     id: "CREATE_TASK",
     icon: SquarePen,
     label: "Create Task",
+  },
+  {
+    id: "SPRINTS",
+    icon: CalendarDays, // Using CalendarDays icon for sprints
+    label: "Sprints",
   },
   {
     id: "VIEW_ALL_TASKS",

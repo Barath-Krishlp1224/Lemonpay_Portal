@@ -1,10 +1,10 @@
-// app/components/projects/page.tsx
 "use client";
 
 import React, { useState, useEffect, useMemo } from "react";
 import { 
   FolderKanban, Search, Calendar, PlusCircle, ChevronRight,
-  Edit2, Trash2, Users, X, Target, ArrowLeft
+  Edit2, Trash2, Users, X, Target, ArrowLeft,
+  CheckCircle, AlertCircle, Layers, ListTodo
 } from "lucide-react";
 import ProjectCreationModal from "./ProjectCreationModal";
 import ProjectDetails from "./ProjectDetails";
@@ -26,6 +26,13 @@ export default function ProjectCreationSystem() {
   
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [editingProject, setEditingProject] = useState<SavedProject | null>(null);
+  const [notification, setNotification] = useState<{message: string, type: 'success' | 'error'} | null>(null);
+
+  // Show notification
+  const showNotification = (message: string, type: 'success' | 'error') => {
+    setNotification({message, type});
+    setTimeout(() => setNotification(null), 5000);
+  };
 
   // Fetch initial data
   useEffect(() => {
@@ -35,12 +42,17 @@ export default function ProjectCreationSystem() {
   const fetchInitialData = async () => {
     setLoading(true);
     try {
+      console.log("Fetching initial data...");
       const [pRes, eRes] = await Promise.all([
         fetch("/api/projects"),
         fetch("/api/employees")
       ]);
+      
       const pData = await pRes.json();
       const eData = await eRes.json();
+      
+      console.log("Projects data:", pData);
+      console.log("Employees data:", eData);
       
       setSavedProjects(Array.isArray(pData) ? pData : (pData.projects || []));
       const rawEmployees = eData.success && Array.isArray(eData.employees) ? eData.employees : [];
@@ -54,6 +66,7 @@ export default function ProjectCreationSystem() {
       })));
     } catch (err) {
       console.error("Initialization failed:", err);
+      showNotification("Failed to load data. Please refresh the page.", 'error');
     } finally {
       setLoading(false);
     }
@@ -61,53 +74,6 @@ export default function ProjectCreationSystem() {
 
   const handleProjectSelect = async (project: SavedProject) => {
     setSelectedProject(project);
-    setSelectedEpic(null);
-    setViewMode("overview");
-  };
-
-  const handleEditProject = (project: SavedProject, e: React.MouseEvent) => {
-    e.stopPropagation();
-    setEditingProject(project);
-    setShowCreateModal(true);
-  };
-
-  const handleDeleteProject = async (projectId: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (!confirm("Are you sure you want to delete this project? This action cannot be undone.")) return;
-    
-    setLoading(true);
-    try {
-      const response = await fetch(`/api/projects/${projectId}`, {
-        method: "DELETE",
-      });
-
-      if (response.ok) {
-        // Remove from list
-        setSavedProjects(prev => prev.filter(p => p._id !== projectId));
-        // If deleted project was selected, clear selection
-        if (selectedProject?._id === projectId) {
-          setSelectedProject(null);
-          setSelectedEpic(null);
-          setViewMode("overview");
-        }
-      } else {
-        const data = await response.json();
-        alert(`Failed to delete project: ${data.error || "Unknown error"}`);
-      }
-    } catch (err) {
-      console.error("Failed to delete project:", err);
-      alert("Network error. Please try again.");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleEpicClick = (epic: Epic) => {
-    setSelectedEpic(epic);
-    setViewMode("tasks");
-  };
-
-  const handleBackToEpics = () => {
     setSelectedEpic(null);
     setViewMode("overview");
   };
@@ -127,37 +93,172 @@ export default function ProjectCreationSystem() {
     });
   }, [savedProjects, searchQuery, dateFilter]);
 
+  // Handle edit project
+  const handleEditProject = (project: SavedProject, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setEditingProject(project);
+    setShowCreateModal(true);
+  };
+
+  // Handle delete project
+  const handleDeleteProject = async (projectId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    
+    if (!confirm("Are you sure you want to delete this project? This action cannot be undone.")) return;
+    
+    console.log("Deleting project with ID:", projectId);
+    
+    try {
+      const response = await fetch(`/api/projects/${projectId}`, {
+        method: "DELETE",
+        headers: {
+          "Content-Type": "application/json",
+        },
+      });
+
+      const responseData = await response.json();
+      console.log("Delete response:", responseData);
+
+      if (response.ok) {
+        // Remove from list
+        setSavedProjects(prev => prev.filter(p => p._id !== projectId));
+        
+        // If deleted project was selected, clear selection
+        if (selectedProject?._id === projectId) {
+          setSelectedProject(null);
+          setSelectedEpic(null);
+          setViewMode("overview");
+        }
+        
+        showNotification("Project deleted successfully!", 'success');
+      } else {
+        const errorMessage = responseData.error || responseData.message || "Failed to delete project";
+        showNotification(`Delete failed: ${errorMessage}`, 'error');
+        console.error("Delete error details:", responseData);
+      }
+    } catch (err: any) {
+      console.error("Failed to delete project:", err);
+      showNotification("Network error. Please check your connection.", 'error');
+    }
+  };
+
+  // Handle epic click
+  const handleEpicClick = (epic: Epic) => {
+    setSelectedEpic(epic);
+    setViewMode("tasks");
+  };
+
+  // Handle back to epics
+  const handleBackToEpics = () => {
+    setSelectedEpic(null);
+    setViewMode("overview");
+  };
+
+  // Handle project created
   const handleProjectCreated = () => {
     fetchInitialData();
     setShowCreateModal(false);
     setEditingProject(null);
+    showNotification("Project created successfully!", 'success');
   };
 
+  // Handle project updated
   const handleProjectUpdated = () => {
     fetchInitialData();
     setShowCreateModal(false);
     setEditingProject(null);
+    showNotification("Project updated successfully!", 'success');
+  };
+
+  // Add navigation buttons in header
+  const headerButtons = () => {
+    if (viewMode === "tasks") {
+      return (
+        <button
+          onClick={handleBackToEpics}
+          className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold rounded-xl transition-colors flex items-center gap-2"
+        >
+          <ArrowLeft size={14} /> Back to Epics
+        </button>
+      );
+    }
+    return null;
+  };
+
+  // Get the main content based on view mode
+  const renderMainContent = () => {
+    switch (viewMode) {
+      case "tasks":
+        return (
+          <>
+            <ProjectDetails 
+              selectedProject={selectedProject}
+              onProjectUpdate={fetchInitialData}
+            />
+            <TasksManagement 
+              selectedProject={selectedProject}
+              selectedEpic={selectedEpic}
+              employees={employees}
+              onBackToEpics={handleBackToEpics}
+            />
+          </>
+        );
+      case "overview":
+      default:
+        return (
+          <>
+            <ProjectDetails 
+              selectedProject={selectedProject}
+              onProjectUpdate={fetchInitialData}
+            />
+            <EpicsManagement 
+              selectedProject={selectedProject}
+              employees={employees}
+              onEpicClick={handleEpicClick}
+            />
+          </>
+        );
+    }
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 p-4 lg:p-20 font-sans text-slate-900">
+    <div className="min-h-screen bg-slate-50 p-4 lg:p-20 font-sans text-slate-900 relative">
+      {/* Notification Toast */}
+      {notification && (
+        <div className={`fixed top-4 right-4 z-50 p-4 rounded-xl shadow-lg flex items-center gap-3 animate-slideIn ${
+          notification.type === 'success' 
+            ? 'bg-green-50 text-green-800 border border-green-200' 
+            : 'bg-red-50 text-red-800 border border-red-200'
+        }`}>
+          {notification.type === 'success' ? (
+            <CheckCircle size={20} className="text-green-600" />
+          ) : (
+            <AlertCircle size={20} className="text-red-600" />
+          )}
+          <span className="text-sm font-bold">{notification.message}</span>
+          <button
+            onClick={() => setNotification(null)}
+            className="ml-4 text-slate-500 hover:text-slate-700"
+          >
+            <X size={16} />
+          </button>
+        </div>
+      )}
+
       <div className="max-w-7xl w-full mx-auto">
         
         {/* Header */}
         <header className="mb-8 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <h1 className="text-4xl font-black text-slate-800 tracking-tight">Project Management</h1>
-          </div>
-          <div className="flex items-center gap-2">
-            {viewMode === "tasks" && (
-              <button
-                onClick={handleBackToEpics}
-                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold rounded-xl transition-colors flex items-center gap-2"
-              >
-                <ArrowLeft size={14} /> Back to Epics
-              </button>
+            {loading && (
+              <div className="flex items-center gap-2 text-sm text-slate-500">
+                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-[#3fa87d]"></div>
+                Loading...
+              </div>
             )}
           </div>
+          {headerButtons()}
         </header>
 
         {/* Main Content Grid */}
@@ -186,6 +287,7 @@ export default function ProjectCreationSystem() {
                       setShowCreateModal(true);
                     }}
                     className="px-4 py-2 bg-[#3fa87d] hover:bg-[#35946d] text-white text-xs font-bold rounded-xl transition-colors flex items-center gap-2"
+                    disabled={loading}
                   >
                     <PlusCircle size={14} /> New
                   </button>
@@ -201,6 +303,7 @@ export default function ProjectCreationSystem() {
                       value={searchQuery}
                       onChange={(e) => setSearchQuery(e.target.value)}
                       className="pl-10 pr-4 py-2 w-full bg-slate-50 border-2 border-slate-100 rounded-xl text-xs font-bold outline-none focus:border-[#3fa87d] focus:bg-white transition-all"
+                      disabled={loading}
                     />
                   </div>
                   <div className="relative">
@@ -210,11 +313,13 @@ export default function ProjectCreationSystem() {
                       value={dateFilter}
                       onChange={(e) => setDateFilter(e.target.value)}
                       className="pl-10 pr-4 py-2 w-full bg-slate-50 border-2 border-slate-100 rounded-xl text-xs font-bold outline-none focus:border-[#3fa87d] focus:bg-white transition-all"
+                      disabled={loading}
                     />
                     {dateFilter && (
                       <button 
                         onClick={() => setDateFilter("")}
                         className="absolute -top-2 -right-2 bg-slate-200 text-slate-600 rounded-full p-1 hover:bg-red-100 hover:text-red-500 transition-colors"
+                        disabled={loading}
                       >
                         <X size={10} />
                       </button>
@@ -226,19 +331,24 @@ export default function ProjectCreationSystem() {
               {/* Projects List - Scrollable */}
               <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar">
                 <div className="space-y-3">
-                  {filteredProjects.length === 0 ? (
+                  {loading ? (
+                    <div className="p-8 text-center">
+                      <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#3fa87d] mx-auto mb-4"></div>
+                      <p className="text-slate-400 font-bold text-sm">Loading projects...</p>
+                    </div>
+                  ) : filteredProjects.length === 0 ? (
                     <div className="p-8 text-center border-2 border-dashed border-slate-100 rounded-2xl">
                       <FolderKanban className="mx-auto text-slate-300 mb-3" size={32} />
                       <p className="text-slate-400 font-bold text-sm">No projects found</p>
                       <button 
                         onClick={() => setShowCreateModal(true)}
-                        className="mt-3 text-[#3fa87d] text-xs font-bold underline"
+                        className="mt-3 text-[#3fa87d] text-xs font-bold underline hover:text-[#35946d]"
                       >
                         Create your first project
                       </button>
                     </div>
                   ) : (
-                    filteredProjects.map((proj) => (
+                    filteredProjects.map((proj: SavedProject) => (
                       <div
                         key={proj._id}
                         onClick={() => handleProjectSelect(proj)}
@@ -246,7 +356,8 @@ export default function ProjectCreationSystem() {
                           selectedProject?._id === proj._id
                             ? "border-[#3fa87d] bg-[#3fa87d]/5 shadow-md"
                             : "border-slate-200 bg-white hover:border-[#3fa87d]/50"
-                        }`}
+                        } ${loading ? 'opacity-50 cursor-not-allowed' : ''}`}
+                        aria-disabled={loading}
                       >
                         <div className="flex items-center gap-3">
                           <div className={`w-10 h-10 rounded-xl flex items-center justify-center text-white font-black text-sm shadow-md transition-colors ${
@@ -278,15 +389,17 @@ export default function ProjectCreationSystem() {
                           <div className="flex items-center gap-1">
                             <button
                               onClick={(e) => handleEditProject(proj, e)}
-                              className="p-1 hover:bg-blue-100 text-blue-600 rounded transition-colors opacity-0 group-hover:opacity-100"
+                              className="p-1 hover:bg-blue-100 text-blue-600 rounded transition-colors opacity-0 group-hover:opacity-100 disabled:opacity-50 disabled:cursor-not-allowed"
                               title="Edit Project"
+                              disabled={loading}
                             >
                               <Edit2 size={14} />
                             </button>
                             <button
                               onClick={(e) => handleDeleteProject(proj._id, e)}
-                              className="p-1 hover:bg-red-100 text-red-600 rounded transition-colors opacity-0 group-hover:opacity-100"
+                              className="p-1 hover:bg-red-100 text-red-600 rounded transition-colors opacity-0 group-hover:opacity-100 disabled:opacity-50 disabled:cursor-not-allowed"
                               title="Delete Project"
+                              disabled={loading}
                             >
                               <Trash2 size={14} />
                             </button>
@@ -303,28 +416,27 @@ export default function ProjectCreationSystem() {
 
           {/* RIGHT COLUMNS (2 columns) */}
           <div className="lg:col-span-2 grid grid-cols-1 lg:grid-cols-2 gap-8 h-[calc(90vh-12rem)]">
-            
-            {/* COLUMN 1: Project Details & Metrics */}
-            <ProjectDetails 
-              selectedProject={selectedProject}
-              employees={employees}
-              onProjectUpdate={fetchInitialData}
-            />
-
-            {/* COLUMN 2: Epics Management or Tasks Management */}
-            {viewMode === "overview" ? (
-              <EpicsManagement 
-                selectedProject={selectedProject}
-                employees={employees}
-                onEpicClick={handleEpicClick}
-              />
+            {selectedProject ? (
+              renderMainContent()
             ) : (
-              <TasksManagement 
-                selectedProject={selectedProject}
-                selectedEpic={selectedEpic}
-                employees={employees}
-                onBackToEpics={handleBackToEpics}
-              />
+              <>
+                <div className="bg-white rounded-3xl border-2 border-slate-200 shadow-xl p-8 flex flex-col items-center justify-center col-span-2">
+                  <FolderKanban className="text-slate-300 mb-4" size={48} />
+                  <h3 className="text-lg font-bold text-slate-600 mb-2">Select a Project</h3>
+                  <p className="text-sm text-slate-400 text-center mb-6">
+                    Choose a project from the list to view details and manage epics and tasks.
+                  </p>
+                  <button
+                    onClick={() => {
+                      setEditingProject(null);
+                      setShowCreateModal(true);
+                    }}
+                    className="px-4 py-2 bg-[#3fa87d] hover:bg-[#35946d] text-white text-xs font-bold rounded-xl transition-colors flex items-center gap-2"
+                  >
+                    <PlusCircle size={14} /> Create New Project
+                  </button>
+                </div>
+              </>
             )}
           </div>
         </div>
@@ -367,6 +479,19 @@ export default function ProjectCreationSystem() {
           -webkit-line-clamp: 2;
           -webkit-box-orient: vertical;
           overflow: hidden;
+        }
+        @keyframes slideIn {
+          from {
+            transform: translateX(100%);
+            opacity: 0;
+          }
+          to {
+            transform: translateX(0);
+            opacity: 1;
+          }
+        }
+        .animate-slideIn {
+          animation: slideIn 0.3s ease-out;
         }
       `}</style>
     </div>

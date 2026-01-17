@@ -51,12 +51,12 @@ export default function ProjectCreationModal({
       setProjectFormData({
         name: "",
         key: "",
-        ownerId: employees.length > 0 ? employees[0]._id : "",
+        ownerId: "",
         assigneeIds: [],
         description: "",
       });
     }
-  }, [editingProject, employees]);
+  }, [editingProject]);
 
   // Auto-generate project key for new projects
   useEffect(() => {
@@ -99,39 +99,49 @@ export default function ProjectCreationModal({
     }
   };
 
-  const toggleAssignee = (employeeId: string) => {
-    setProjectFormData(prev => ({
-      ...prev,
-      assigneeIds: prev.assigneeIds.includes(employeeId)
-        ? prev.assigneeIds.filter(id => id !== employeeId)
-        : [...prev.assigneeIds, employeeId]
-    }));
-  };
-
   const handleProjectSubmit = async () => {
     if (nameError || !projectFormData.name.trim()) return;
 
     setLoading(true);
     setMessage("");
+    
     try {
-      const url = editingProject ? `/api/projects/${editingProject._id}` : "/api/projects";
-      const method = editingProject ? "PUT" : "POST";
-      
+      const requestData = {
+        name: projectFormData.name.trim(),
+        key: projectFormData.key.toUpperCase(),
+        ownerId: "", // Empty string for owner
+        assigneeIds: [], // Empty array for assignees
+        description: projectFormData.description,
+      };
+
+      console.log("Submitting project data:", requestData);
+      console.log("Editing project:", editingProject);
+
+      let url = "/api/projects";
+      let method = "POST";
+
+      if (editingProject) {
+        url = `/api/projects/${editingProject._id}`;
+        method = "PUT";
+      }
+
+      console.log(`Making ${method} request to: ${url}`);
+
       const response = await fetch(url, {
         method,
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name: projectFormData.name.trim(),
-          key: projectFormData.key.toUpperCase(),
-          ownerId: projectFormData.ownerId,
-          assigneeIds: projectFormData.assigneeIds,
-          description: projectFormData.description,
-        }),
+        body: JSON.stringify(requestData),
       });
 
+      const responseData = await response.json();
+      console.log("Response status:", response.status);
+      console.log("Response data:", responseData);
+
       if (response.ok) {
-        setMessage(`✅ Project ${editingProject ? "updated" : "created"} successfully!`);
+        const successMessage = `✅ Project ${editingProject ? "updated" : "created"} successfully!`;
+        setMessage(successMessage);
         
+        // Clear form and close modal after successful operation
         setTimeout(() => {
           if (editingProject) {
             onProjectUpdated();
@@ -139,16 +149,21 @@ export default function ProjectCreationModal({
             onProjectCreated();
           }
           onClose();
-        }, 1000);
+        }, 1500);
       } else {
-        const data = await response.json();
-        setMessage(`❌ ${data.error || `Failed to ${editingProject ? "update" : "create"} project`}`);
+        // Handle specific error messages
+        const errorMessage = responseData.error || 
+                           responseData.message || 
+                           `Failed to ${editingProject ? "update" : "create"} project`;
+        setMessage(`❌ ${errorMessage}`);
       }
-    } catch (err) {
+    } catch (err: any) {
+      console.error("Network error:", err);
       setMessage("❌ Network error. Please try again.");
     } finally {
       setLoading(false);
-      setTimeout(() => setMessage(""), 3000);
+      // Clear message after 5 seconds
+      setTimeout(() => setMessage(""), 5000);
     }
   };
 
@@ -162,7 +177,11 @@ export default function ProjectCreationModal({
             <h1 className="text-3xl font-black text-slate-800 tracking-tight">
               {editingProject ? "Edit Project" : "Create Project"}
             </h1>
-            <button onClick={onClose} className="w-10 h-10 rounded-full bg-slate-50 hover:bg-slate-100 flex items-center justify-center transition-colors">
+            <button 
+              onClick={onClose} 
+              className="w-10 h-10 rounded-full bg-slate-50 hover:bg-slate-100 flex items-center justify-center transition-colors"
+              disabled={loading}
+            >
               <X size={20} className="text-slate-400" />
             </button>
           </header>
@@ -171,7 +190,12 @@ export default function ProjectCreationModal({
             <div className={`mb-6 p-4 rounded-2xl text-xs flex items-center gap-2 font-bold ${
               message.includes("✅") ? "bg-green-50 text-green-800 border border-green-200" : "bg-red-50 text-red-800 border border-red-200"
             }`}>
-              <CheckCircle2 size={16}/> {message}
+              {message.includes("✅") ? (
+                <CheckCircle2 size={16} className="text-green-600" />
+              ) : (
+                <AlertCircle size={16} className="text-red-600" />
+              )}
+              <span>{message.replace("✅", "").replace("❌", "").trim()}</span>
             </div>
           )}
 
@@ -179,107 +203,61 @@ export default function ProjectCreationModal({
             <div className="space-y-2">
               <label className="text-[10px] font-black text-slate-500 uppercase ml-1">Project Name *</label>
               <input
-                className={`w-full px-6 py-4 bg-slate-50 border-2 border-slate-100 rounded-2xl outline-none focus:border-[#3fa87d] focus:bg-white font-bold text-slate-900 transition-all ${nameError ? "border-red-400" : ""}`}
+                className={`w-full px-6 py-4 bg-slate-50 border-2 border-slate-100 rounded-2xl outline-none focus:border-[#3fa87d] focus:bg-white font-bold text-slate-900 transition-all ${
+                  nameError ? "border-red-400 focus:border-red-400" : ""
+                } ${loading ? "opacity-50 cursor-not-allowed" : ""}`}
                 placeholder="e.g. Apollo Phase 2"
                 value={projectFormData.name}
                 onChange={handleNameChange}
+                disabled={loading}
               />
-              {nameError && <p className="text-[10px] text-red-500 font-bold ml-1 flex items-center gap-1"><AlertCircle size={12} /> {nameError}</p>}
+              {nameError && (
+                <p className="text-[10px] text-red-500 font-bold ml-1 flex items-center gap-1">
+                  <AlertCircle size={12} /> 
+                  {nameError}
+                </p>
+              )}
             </div>
 
             <div className="space-y-2">
               <div className="flex items-center justify-between">
                 <label className="text-[10px] font-black text-slate-500 uppercase ml-1">Project ID *</label>
-                <button onClick={() => setEditingKey(!editingKey)} className="text-[10px] font-bold text-[#3fa87d] uppercase tracking-wider">
+                <button 
+                  onClick={() => setEditingKey(!editingKey)} 
+                  className="text-[10px] font-bold text-[#3fa87d] uppercase tracking-wider hover:text-[#35946d] transition-colors"
+                  disabled={loading}
+                >
                   {editingKey ? "Save Key" : "Edit Key"}
                 </button>
               </div>
               <input
                 type="text"
-                className={`w-full px-6 py-4 border-2 border-slate-100 rounded-2xl outline-none font-bold uppercase transition-all ${!editingKey ? "bg-slate-100 text-slate-400" : "bg-slate-50 focus:border-[#3fa87d] focus:bg-white"}`}
+                className={`w-full px-6 py-4 border-2 rounded-2xl outline-none font-bold uppercase transition-all ${
+                  !editingKey 
+                    ? "bg-slate-100 text-slate-400 border-slate-100" 
+                    : "bg-slate-50 focus:border-[#3fa87d] focus:bg-white border-slate-100"
+                } ${loading ? "opacity-50 cursor-not-allowed" : ""}`}
                 value={projectFormData.key}
                 readOnly={!editingKey}
-                onChange={(e) => setProjectFormData({...projectFormData, key: e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '')})}
+                onChange={(e) => setProjectFormData({
+                  ...projectFormData, 
+                  key: e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '')
+                })}
                 maxLength={10}
+                disabled={loading}
               />
-            </div>
-
-            <div className="space-y-2">
-              <label className="text-[10px] font-black text-slate-500 uppercase ml-1">Project Lead *</label>
-              <select
-                className="w-full px-6 py-4 bg-slate-50 border-2 border-slate-100 rounded-2xl outline-none focus:border-[#3fa87d] focus:bg-white font-bold text-slate-900 transition-all"
-                value={projectFormData.ownerId}
-                onChange={(e) => setProjectFormData({ ...projectFormData, ownerId: e.target.value })}
-              >
-                <option value="">Select Project Lead</option>
-                {employees.map((emp) => (
-                  <option key={emp._id} value={emp._id}>{emp.name}</option>
-                ))}
-              </select>
-            </div>
-
-            {/* Multiple Assignees Selection */}
-            <div className="space-y-2">
-              <label className="text-[10px] font-black text-slate-500 uppercase ml-1">Team Members</label>
-              <div className="max-h-48 overflow-y-auto p-4 bg-slate-50 border-2 border-slate-200 rounded-2xl">
-                <div className="grid grid-cols-1 gap-3">
-                  {employees.map(emp => (
-                    <div key={emp._id} className="flex items-center gap-3 p-3 hover:bg-slate-100 rounded-xl cursor-pointer">
-                      <button
-                        type="button"
-                        onClick={() => toggleAssignee(emp._id)}
-                        className={`w-6 h-6 rounded border-2 flex items-center justify-center transition-colors ${
-                          projectFormData.assigneeIds.includes(emp._id)
-                            ? "bg-[#3fa87d] border-[#3fa87d] text-white"
-                            : "bg-white border-slate-300"
-                        }`}
-                      >
-                        {projectFormData.assigneeIds.includes(emp._id) && <Check size={14} />}
-                      </button>
-                      <div className="flex items-center gap-3">
-                        <div className="w-8 h-8 bg-slate-300 rounded-full flex items-center justify-center text-xs font-bold">
-                          {emp.name.charAt(0)}
-                        </div>
-                        <div>
-                          <span className="text-sm font-bold text-slate-800">{emp.name}</span>
-                          <p className="text-xs text-slate-500">{emp.department || "No department"}</p>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-              {projectFormData.assigneeIds.length > 0 && (
-                <div className="flex flex-wrap gap-2 mt-2">
-                  {projectFormData.assigneeIds.map(assigneeId => {
-                    const assignee = employees.find(e => e._id === assigneeId);
-                    return assignee ? (
-                      <div key={assigneeId} className="flex items-center gap-2 px-3 py-1.5 bg-slate-100 rounded-full">
-                        <div className="w-5 h-5 bg-slate-300 rounded-full flex items-center justify-center text-[10px] font-bold">
-                          {assignee.name.charAt(0)}
-                        </div>
-                        <span className="text-xs font-bold text-slate-700">{assignee.name}</span>
-                        <button
-                          type="button"
-                          onClick={() => toggleAssignee(assigneeId)}
-                          className="text-slate-500 hover:text-red-500 ml-1"
-                        >
-                          <X size={12} />
-                        </button>
-                      </div>
-                    ) : null;
-                  })}
-                </div>
-              )}
             </div>
 
             <div className="space-y-2">
               <label className="text-[10px] font-black text-slate-500 uppercase ml-1">Description</label>
               <textarea
-                className="w-full px-6 py-4 bg-slate-50 border-2 border-slate-100 rounded-2xl outline-none focus:border-[#3fa87d] focus:bg-white font-bold text-slate-900 transition-all min-h-[100px]"
+                className={`w-full px-6 py-4 bg-slate-50 border-2 border-slate-100 rounded-2xl outline-none focus:border-[#3fa87d] focus:bg-white font-bold text-slate-900 transition-all min-h-[100px] ${
+                  loading ? "opacity-50 cursor-not-allowed" : ""
+                }`}
                 placeholder="Project description (optional)"
                 value={projectFormData.description}
                 onChange={(e) => setProjectFormData({ ...projectFormData, description: e.target.value })}
+                disabled={loading}
               />
             </div>
           </div>
@@ -288,16 +266,27 @@ export default function ProjectCreationModal({
         <div className="p-8 border-t border-slate-100 bg-slate-50/50 flex justify-end gap-4">
           <button
             onClick={onClose}
-            className="px-6 py-4 bg-slate-200 text-slate-700 text-xs font-black uppercase rounded-2xl hover:bg-slate-300 transition-all"
+            className={`px-6 py-4 bg-slate-200 text-slate-700 text-xs font-black uppercase rounded-2xl hover:bg-slate-300 transition-all ${
+              loading ? "opacity-50 cursor-not-allowed" : ""
+            }`}
+            disabled={loading}
           >
             Cancel
           </button>
           <button
             onClick={handleProjectSubmit}
-            disabled={loading || !!nameError || !projectFormData.name || !projectFormData.ownerId}
-            className="px-12 py-4 bg-slate-900 text-white text-xs font-black uppercase rounded-2xl shadow-xl hover:bg-[#3fa87d] transition-all disabled:opacity-30"
+            disabled={loading || !!nameError || !projectFormData.name.trim()}
+            className="px-12 py-4 bg-slate-900 text-white text-xs font-black uppercase rounded-2xl shadow-xl hover:bg-[#3fa87d] transition-all disabled:opacity-30 disabled:cursor-not-allowed"
           >
-            {loading ? "Processing..." : editingProject ? "Update Project" : "Create Project"}
+            {loading ? (
+              <span className="flex items-center gap-2">
+                <svg className="animate-spin h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                Processing...
+              </span>
+            ) : editingProject ? "Update Project" : "Create Project"}
           </button>
         </div>
       </div>

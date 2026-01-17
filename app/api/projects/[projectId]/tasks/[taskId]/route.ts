@@ -1,10 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
-import connectDB from '@/lib/mongodb'; // Ensure this matches your export (default vs named)
+import connectDB from '@/lib/mongodb';
 import Task from '@/models/Task';
 
-// 1. Define the interface to match folder names: [id] and [taskId]
-// 2. Wrap it in a Promise for Next.js 15 compatibility
-type RouteParams = Promise<{ id: string; taskId: string }>;
+// Use projectId and taskId to match folder names: [projectId] and [taskId]
+type RouteParams = Promise<{ projectId: string; taskId: string }>;
 
 // GET single task
 export async function GET(
@@ -15,10 +14,10 @@ export async function GET(
     await connectDB();
     
     // Await the params
-    const { id, taskId } = await params;
+    const { projectId, taskId } = await params; // Changed from id to projectId
     
     const task = await Task.findOne({
-      projectId: id, // Mapping the folder [id] to your DB field 'projectId'
+      projectId: projectId, // Updated to use projectId
       taskId: taskId
     });
 
@@ -49,11 +48,11 @@ export async function PUT(
   try {
     await connectDB();
     
-    const { id, taskId } = await params;
+    const { projectId, taskId } = await params; // Changed from id to projectId
     const body = await request.json();
     
     const task = await Task.findOneAndUpdate(
-      { projectId: id, taskId: taskId },
+      { projectId: projectId, taskId: taskId }, // Updated to use projectId
       body,
       { new: true, runValidators: true }
     );
@@ -85,10 +84,10 @@ export async function DELETE(
   try {
     await connectDB();
     
-    const { id, taskId } = await params;
+    const { projectId, taskId } = await params; // Changed from id to projectId
     
     const task = await Task.findOneAndDelete({
-      projectId: id,
+      projectId: projectId, // Updated to use projectId
       taskId: taskId
     });
 

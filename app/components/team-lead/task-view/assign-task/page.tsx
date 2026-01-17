@@ -1,360 +1,861 @@
 "use client";
 
-import React, { useState, useEffect, useMemo, useCallback } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import { 
-  LayoutGrid, ListTodo, BarChart2, User, X, 
-  CalendarDays, FolderKanban, Plus, Activity, Search,
-  GitBranch, Layers, KanbanSquare, TrendingUp, CheckCircle2, Clock
+  FileText, Target, GitBranch, ClipboardCheck, Users,
+  Calendar, Clock, CheckCircle, AlertCircle, ChevronDown, 
+  ChevronRight, ArrowUpRight, BarChart3, PieChart, 
+  TrendingUp, Hash, Tag, Flag, User, MessageSquare,
+  Paperclip, ExternalLink, CalendarDays, Clock as ClockIcon,
+  CheckSquare, Square, BookOpen, Bug
 } from "lucide-react";
-import { ToastContainer, toast } from "react-toastify";
-import "react-toastify/dist/ReactToastify.css";
+import type { Employee, SavedProject, Epic } from "@/app/types/project";
 
-// Components
-import TaskModal from "./components/TaskModal";
-import TaskBoardView from "./components/TaskBoardView";
-import TaskChartView from "./components/TaskChartView";
-import { getAggregatedTaskData } from "./utils/aggregation";
+interface Subtask {
+  _id: string;
+  title: string;
+  assigneeId: string;
+  assigneeName: string;
+  status: "Todo" | "In Progress" | "Done";
+  progressPercentage: number;
+  taskId: string;
+  createdAt: string;
+  updatedAt: string;
+}
 
-// --- Types & Constants ---
-export type ViewType = "card" | "board" | "chart";
+// Independent interface definition to avoid TypeScript conflicts
+interface TaskWithSubtasks {
+  _id: string;
+  title: string;
+  description?: string;
+  projectId: string;
+  epicId?: string;
+  assigneeIds: string[];
+  reporterIds: string[];
+  assigneeNames?: string[];
+  reporterNames?: string[];
+  epicName?: string;
+  projectName?: string;
+  subtasks?: Subtask[];
+  summary: string;
+  issueKey: string;
+  issueType: "Story" | "Task" | "Bug";
+  storyPoints: number;
+  status: "Backlog" | "Todo" | "In Progress" | "Review" | "Done" | "Blocked";
+  priority: "Lowest" | "Low" | "Medium" | "High" | "Highest";
+  dueDate?: string;
+  createdAt: string;
+  updatedAt: string;
+}
 
-const PRIORITY_COLORS: Record<string, string> = {
-  Low: "bg-gray-100 text-gray-600",
-  Medium: "bg-yellow-100 text-yellow-700",
-  High: "bg-orange-100 text-orange-700",
-  Critical: "bg-red-100 text-red-700"
-};
+interface ProjectViewProps {
+  employees: Employee[];
+}
 
-const ALL_STATUSES = ["Backlog", "To Do", "In Progress", "Review", "Completed", "On Hold"];
-
-// --- Helper Components ---
-
-const ProgressRing: React.FC<{ percentage: number }> = ({ percentage }) => (
-  <div className="relative w-12 h-12 flex items-center justify-center">
-    <svg className="w-full h-full transform -rotate-90">
-      <circle cx="24" cy="24" r="20" stroke="currentColor" strokeWidth="4" fill="transparent" className="text-slate-100" />
-      <circle cx="24" cy="24" r="20" stroke="currentColor" strokeWidth="4" fill="transparent" 
-        strokeDasharray={125.6} strokeDashoffset={125.6 - (125.6 * percentage) / 100}
-        className="text-[#3fa87d] transition-all duration-500" />
-    </svg>
-    <span className="absolute text-[10px] font-black">{percentage}%</span>
-  </div>
-);
-
-const SubtaskNode: React.FC<{ sub: any; level: number }> = ({ sub, level }) => (
-  <div className={`mt-2 ${level > 0 ? "ml-6 border-l border-slate-200 pl-4" : ""}`}>
-    <div className="flex items-center justify-between bg-white/50 p-2 rounded-lg border border-slate-100">
-      <div className="flex items-center gap-2">
-        <GitBranch size={10} className="text-slate-400" />
-        <span className="text-[10px] font-bold text-slate-700">{sub.title}</span>
-      </div>
-      <span className={`text-[8px] font-black px-1.5 py-0.5 rounded uppercase ${
-          sub.status === 'Completed' || sub.status === 'Done' ? 'bg-green-100 text-green-700' : 'bg-blue-100 text-blue-700'
-      }`}>{sub.status}</span>
-    </div>
-    {sub.subtasks?.map((child: any, i: number) => <SubtaskNode key={i} sub={child} level={level + 1} />)}
-  </div>
-);
-
-// --- Main Page ---
-
-const TasksPage: React.FC = () => {
-  const [tasks, setTasks] = useState<any[]>([]);
-  const [projects, setProjects] = useState<any[]>([]);
-  const [employees, setEmployees] = useState<any[]>([]);
-  const [selectedProject, setSelectedProject] = useState<any | null>(null);
+export default function ProjectView({ employees }: ProjectViewProps) {
   const [loading, setLoading] = useState(true);
-  const [viewType, setViewType] = useState<ViewType>("card");
+  const [projects, setProjects] = useState<SavedProject[]>([]);
+  const [epics, setEpics] = useState<Epic[]>([]);
+  const [tasks, setTasks] = useState<TaskWithSubtasks[]>([]);
+  const [selectedProject, setSelectedProject] = useState<SavedProject | null>(null);
+  const [selectedEpic, setSelectedEpic] = useState<Epic | null>(null);
+  const [expandedEpics, setExpandedEpics] = useState<Set<string>>(new Set());
+  const [expandedTasks, setExpandedTasks] = useState<Set<string>>(new Set());
+  
+  // Filter states
   const [projectSearch, setProjectSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState<string>("");
+  const [priorityFilter, setPriorityFilter] = useState<string>("");
 
-  // Modal & Edit States
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  const [selectedTaskForModal, setSelectedTaskForModal] = useState<any | null>(null);
-  const [isEditing, setIsEditing] = useState(false);
-  const [draftTask, setDraftTask] = useState<any>({});
-  const [subtasks, setSubtasks] = useState<any[]>([]);
+  // Progress statistics
+  const [projectStats, setProjectStats] = useState({
+    totalProjects: 0,
+    totalEpics: 0,
+    totalTasks: 0,
+    totalSubtasks: 0,
+    overallProgress: 0,
+  });
 
-  const fetchAllData = useCallback(async () => {
-    try {
-      const [tRes, pRes, eRes] = await Promise.all([
-        fetch("/api/tasks"), fetch("/api/projects"), fetch("/api/employees")
-      ]);
-      const [tData, pData, eData] = await Promise.all([tRes.json(), pRes.json(), eRes.json()]);
-      setTasks(Array.isArray(tData) ? tData : (tData.tasks || []));
-      setProjects(Array.isArray(pData) ? pData : []);
-      setEmployees(Array.isArray(eData) ? eData : (eData.employees || []));
-      setLoading(false);
-    } catch (err) {
-      toast.error("Failed to sync data");
-      setLoading(false);
-    }
+  // Fetch all data on component mount
+  useEffect(() => {
+    fetchAllData();
   }, []);
 
-  useEffect(() => { fetchAllData(); }, [fetchAllData]);
+  const fetchAllData = async () => {
+    setLoading(true);
+    try {
+      // Fetch projects
+      const projectsRes = await fetch('/api/projects');
+      const projectsData = await projectsRes.json();
+      const projectsList = Array.isArray(projectsData) ? projectsData : 
+                          projectsData.data || projectsData.projects || [];
+      setProjects(projectsList);
+      setProjectStats(prev => ({ ...prev, totalProjects: projectsList.length }));
 
-  // --- Recursive Subtask Logic ---
-  
-  const updateSubtaskTree = (subs: any[], path: number[], updateFn: (sub: any) => any): any[] => {
-    return subs.map((sub, index) => {
-      if (index === path[0]) {
-        if (path.length === 1) return updateFn(sub);
-        return { 
-          ...sub, 
-          subtasks: updateSubtaskTree(sub.subtasks || [], path.slice(1), updateFn) 
-        };
+      // Fetch epics
+      const epicsRes = await fetch('/api/epics');
+      const epicsData = await epicsRes.json();
+      const epicsList = Array.isArray(epicsData) ? epicsData : 
+                       epicsData.data || epicsData.epics || [];
+      setEpics(epicsList);
+      setProjectStats(prev => ({ ...prev, totalEpics: epicsList.length }));
+
+      // Fetch tasks
+      const tasksRes = await fetch('/api/tasks');
+      const tasksData = await tasksRes.json();
+      let tasksList: any[] = [];
+      
+      if (Array.isArray(tasksData)) {
+        tasksList = tasksData;
+      } else if (tasksData && Array.isArray(tasksData.data)) {
+        tasksList = tasksData.data;
+      } else if (tasksData && Array.isArray(tasksData.tasks)) {
+        tasksList = tasksData.tasks;
       }
-      return sub;
+      
+      // Transform task data to ensure proper typing
+      const transformedTasks = tasksList.map(task => ({
+        _id: task._id || '',
+        title: task.title || '',
+        description: task.description || '',
+        projectId: task.projectId || '',
+        epicId: task.epicId || '',
+        assigneeIds: task.assigneeIds || (task.assigneeId ? [task.assigneeId] : []),
+        reporterIds: task.reporterIds || (task.reporterId ? [task.reporterId] : []),
+        assigneeNames: task.assigneeNames || [],
+        reporterNames: task.reporterNames || [],
+        epicName: task.epicName || '',
+        projectName: task.projectName || '',
+        subtasks: task.subtasks || [],
+        summary: task.summary || '',
+        issueKey: task.issueKey || task.taskId || `TASK-${task._id?.substring(0, 8) || 'N/A'}`,
+        issueType: task.issueType || "Task",
+        storyPoints: task.storyPoints || 0,
+        status: task.status || "Backlog",
+        priority: task.priority || "Medium",
+        dueDate: task.dueDate || '',
+        createdAt: task.createdAt || new Date().toISOString(),
+        updatedAt: task.updatedAt || new Date().toISOString()
+      } as TaskWithSubtasks));
+      
+      setTasks(transformedTasks);
+      setProjectStats(prev => ({ ...prev, totalTasks: transformedTasks.length }));
+
+      // Calculate subtask total
+      const totalSubtasks = transformedTasks.reduce((acc: number, task: TaskWithSubtasks) => {
+        return acc + (task.subtasks?.length || 0);
+      }, 0);
+      setProjectStats(prev => ({ ...prev, totalSubtasks }));
+
+      // Calculate overall progress
+      if (transformedTasks.length > 0) {
+        const totalTasks = transformedTasks.length;
+        const completedTasks = transformedTasks.filter((task: TaskWithSubtasks) => 
+          task.status === "Done"
+        ).length;
+        const overallProgress = Math.round((completedTasks / totalTasks) * 100);
+        setProjectStats(prev => ({ ...prev, overallProgress }));
+      }
+
+    } catch (err) {
+      console.error("Failed to fetch data:", err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Get epics for selected project
+  const getProjectEpics = useMemo(() => {
+    if (!selectedProject) return [];
+    return epics.filter(epic => epic.projectId === selectedProject._id);
+  }, [selectedProject, epics]);
+
+  // Get tasks for selected epic
+  const getEpicTasks = useMemo(() => {
+    if (!selectedEpic) return [];
+    return tasks.filter(task => task.epicId === selectedEpic._id);
+  }, [selectedEpic, tasks]);
+
+  // Get tasks for selected project (when no epic selected)
+  const getProjectTasks = useMemo(() => {
+    if (!selectedProject) return [];
+    return tasks.filter(task => task.projectId === selectedProject._id);
+  }, [selectedProject, tasks]);
+
+  // Get filtered tasks based on current filters
+  const getFilteredTasks = useMemo(() => {
+    const taskList = selectedEpic ? getEpicTasks : getProjectTasks;
+    
+    return taskList.filter(task => {
+      const matchesStatus = statusFilter ? task.status === statusFilter : true;
+      const matchesPriority = priorityFilter ? task.priority === priorityFilter : true;
+      return matchesStatus && matchesPriority;
     });
+  }, [selectedEpic, getEpicTasks, getProjectTasks, statusFilter, priorityFilter]);
+
+  // Toggle epic expansion
+  const toggleEpicExpand = (epicId: string) => {
+    const newExpanded = new Set(expandedEpics);
+    if (newExpanded.has(epicId)) {
+      newExpanded.delete(epicId);
+    } else {
+      newExpanded.add(epicId);
+    }
+    setExpandedEpics(newExpanded);
   };
 
-  const addSubtask = (path: number[]) => {
-    const newSub = { 
-        id: `SUB-${Date.now()}`, title: "New Item", status: "Pending", completion: 0, 
-        subtasks: [], storyPoints: 0, timeSpent: 0, date: new Date().toISOString().split('T')[0] 
-    };
-    setSubtasks(prev => {
-      if (path.length === 0) return [...prev, newSub];
-      return updateSubtaskTree(prev, path, (s) => ({
-        ...s, subtasks: [...(s.subtasks || []), newSub]
-      }));
-    });
+  // Toggle task expansion
+  const toggleTaskExpand = (taskId: string) => {
+    const newExpanded = new Set(expandedTasks);
+    if (newExpanded.has(taskId)) {
+      newExpanded.delete(taskId);
+    } else {
+      newExpanded.add(taskId);
+    }
+    setExpandedTasks(newExpanded);
   };
 
-  const removeSubtask = (path: number[]) => {
-    setSubtasks(prev => {
-      if (path.length === 1) return prev.filter((_, idx) => idx !== path[0]);
-      return updateSubtaskTree(prev, path.slice(0, -1), (parent) => ({
-        ...parent,
-        subtasks: parent.subtasks.filter((_: any, idx: number) => idx !== path[path.length - 1])
-      }));
-    });
+  // Calculate task progress
+  const calculateTaskProgress = (task: TaskWithSubtasks) => {
+    if (task.subtasks && task.subtasks.length > 0) {
+      const doneSubtasks = task.subtasks.filter(s => s.status === "Done").length;
+      return Math.round((doneSubtasks / task.subtasks.length) * 100);
+    }
+    
+    // If no subtasks, use task status
+    switch (task.status) {
+      case "Done": return 100;
+      case "In Progress": return 50;
+      case "Review": return 75;
+      case "Todo": return 10;
+      case "Backlog": return 0;
+      case "Blocked": return 0;
+      default: return 0;
+    }
   };
 
-  const onToggleEdit = (path: number[]) => console.log("Edit requested for path:", path);
-  const onToggleExpansion = (path: number[]) => console.log("Expand requested for path:", path);
+  // Calculate epic progress
+  const calculateEpicProgress = (epic: Epic) => {
+    const epicTasks = tasks.filter(task => task.epicId === epic._id);
+    if (epicTasks.length === 0) return 0;
+    
+    const totalProgress = epicTasks.reduce((acc, task) => {
+      return acc + calculateTaskProgress(task);
+    }, 0);
+    
+    return Math.round(totalProgress / epicTasks.length);
+  };
 
-  // --- Task Handlers ---
+  // Calculate project progress
+  const calculateProjectProgress = (project: SavedProject) => {
+    const projectTasks = tasks.filter(task => task.projectId === project._id);
+    if (projectTasks.length === 0) return 0;
+    
+    const totalProgress = projectTasks.reduce((acc, task) => {
+      return acc + calculateTaskProgress(task);
+    }, 0);
+    
+    return Math.round(totalProgress / projectTasks.length);
+  };
 
-  const handleUpdate = async (e: React.FormEvent) => {
-    e.preventDefault();
+  // Get status color
+  const getStatusColor = (status: string) => {
+    switch(status) {
+      case "Done": return "bg-green-100 text-green-800";
+      case "In Progress": return "bg-blue-100 text-blue-800";
+      case "Review": return "bg-purple-100 text-purple-800";
+      case "Todo": return "bg-yellow-100 text-yellow-800";
+      case "Backlog": return "bg-gray-100 text-gray-800";
+      case "Blocked": return "bg-red-100 text-red-800";
+      default: return "bg-gray-100 text-gray-800";
+    }
+  };
+
+  // Get priority color
+  const getPriorityColor = (priority: string) => {
+    switch(priority) {
+      case "Highest": return "bg-red-100 text-red-800";
+      case "High": return "bg-orange-100 text-orange-800";
+      case "Medium": return "bg-yellow-100 text-yellow-800";
+      case "Low": return "bg-green-100 text-green-800";
+      case "Lowest": return "bg-blue-100 text-blue-800";
+      default: return "bg-gray-100 text-gray-800";
+    }
+  };
+
+  // Get subtask status color - fixed
+  const getSubtaskStatusColor = (status: string) => {
+    switch(status) {
+      case "Done": return "bg-green-100 text-green-800";
+      case "In Progress": return "bg-blue-100 text-blue-800";
+      case "Todo": return "bg-yellow-100 text-yellow-800";
+      default: return "bg-gray-100 text-gray-800";
+    }
+  };
+
+  // Get issue type color
+  const getIssueTypeColor = (issueType: string) => {
+    switch(issueType) {
+      case "Story": return "bg-blue-100 text-blue-800";
+      case "Task": return "bg-green-100 text-green-800";
+      case "Bug": return "bg-red-100 text-red-800";
+      default: return "bg-gray-100 text-gray-800";
+    }
+  };
+
+  // Get issue type icon
+  const getIssueTypeIcon = (issueType: string) => {
+    switch(issueType) {
+      case "Story": return <BookOpen size={12} />;
+      case "Task": return <ClipboardCheck size={12} />;
+      case "Bug": return <Bug size={12} />;
+      default: return <ClipboardCheck size={12} />;
+    }
+  };
+
+  // Format date
+  const formatDate = (dateString: string) => {
+    if (!dateString) return "N/A";
     try {
-      const res = await fetch(`/api/tasks/${selectedTaskForModal._id}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...draftTask, subtasks }),
+      return new Date(dateString).toLocaleDateString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric'
       });
-      if (res.ok) { setIsModalOpen(false); fetchAllData(); toast.success("Task updated"); }
-    } catch (err) { toast.error("Update failed"); }
+    } catch {
+      return dateString;
+    }
   };
 
-  const handleDelete = async (id: string) => {
-    if (!confirm("Delete this task?")) return;
-    try {
-      const res = await fetch(`/api/tasks/${id}`, { method: "DELETE" });
-      if (res.ok) { setIsModalOpen(false); fetchAllData(); toast.info("Task deleted"); }
-    } catch (err) { toast.error("Delete failed"); }
+  // Get assignee names
+  const getAssigneeNames = (task: TaskWithSubtasks) => {
+    if (task.assigneeNames && task.assigneeNames.length > 0) {
+      return task.assigneeNames;
+    }
+    return employees
+      .filter(emp => task.assigneeIds?.includes(emp._id))
+      .map(emp => emp.name);
   };
 
-  const onTaskStatusChange = async (taskId: string, newStatus: string) => {
-    try {
-      await fetch(`/api/tasks/${taskId}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: newStatus }),
-      });
-      fetchAllData();
-    } catch (err) { toast.error("Status update failed"); }
+  // Get reporter names
+  const getReporterNames = (task: TaskWithSubtasks) => {
+    if (task.reporterNames && task.reporterNames.length > 0) {
+      return task.reporterNames;
+    }
+    return employees
+      .filter(emp => task.reporterIds?.includes(emp._id))
+      .map(emp => emp.name);
   };
 
-  const onSubtaskStatusChange = (taskId: string, subtaskId: string, newStatus: string) => {
-    const findAndUpdateById = (subs: any[]): any[] => {
-      return subs.map(s => {
-        if (s.id === subtaskId) return { ...s, status: newStatus };
-        if (s.subtasks) return { ...s, subtasks: findAndUpdateById(s.subtasks) };
-        return s;
-      });
-    };
-    setSubtasks(prev => findAndUpdateById(prev));
-  };
+  // Filtered projects based on search
+  const filteredProjects = useMemo(() => {
+    return projects.filter(project =>
+      project.name.toLowerCase().includes(projectSearch.toLowerCase()) ||
+      project.key.toLowerCase().includes(projectSearch.toLowerCase())
+    );
+  }, [projects, projectSearch]);
 
-  const handleStartSprint = (taskId: string) => {
-    onTaskStatusChange(taskId, "In Progress");
-    toast.success("Sprint Started");
-  };
-
-  const openTaskModal = (task: any) => {
-    const aggregated = getAggregatedTaskData(task);
-    setSelectedTaskForModal(aggregated);
-    setSubtasks(aggregated.subtasks || []);
-    setIsModalOpen(true);
-    setIsEditing(false);
-  };
-
-  // --- Filtering & Stats ---
-
-  const filteredTasks = useMemo(() => {
-    if (!selectedProject || viewType !== "card") return tasks;
-    return tasks.filter(t => t.projectId === selectedProject._id || t.project === selectedProject.name);
-  }, [tasks, selectedProject, viewType]);
-
-  const stats = useMemo(() => {
-    if (!filteredTasks.length) return { done: 0, progress: 0, overdue: 0 };
-    const today = new Date().getTime();
-    const completed = filteredTasks.filter(t => t.status === "Completed" || t.status === "Done").length;
-    const avgProgress = Math.round(filteredTasks.reduce((acc, t) => acc + (t.completion || 0), 0) / filteredTasks.length);
-    const overdue = filteredTasks.filter(t => t.dueDate && new Date(t.dueDate).getTime() < today && t.status !== "Completed").length;
-    return { done: completed, progress: avgProgress, overdue };
-  }, [filteredTasks]);
-
-  if (loading) return <div className="flex h-screen items-center justify-center font-black text-slate-400">SYNCING ECOSYSTEM...</div>;
+  if (loading) {
+    return (
+      <div className="fixed inset-0 flex items-center justify-center">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-[#3fa87d]"></div>
+        <p className="mt-4 text-slate-600">Loading projects data...</p>
+      </div>
+    );
+  }
 
   return (
-    <div className="flex flex-col h-screen mt-20 rounded-4xl overflow-hidden">
-      <ToastContainer position="bottom-right" />
-      
-      {/* Clean Nav: Only the Center Switcher */}
-      <nav className="z-50 px-8 py-4 bg-white border-b border-slate-100 flex justify-center">
-        <div className="flex bg-slate-100 p-1 rounded-full border border-slate-200">
-          {[
-            { id: "card", label: "Overview", icon: LayoutGrid },
-            { id: "board", label: "Board", icon: ListTodo },
-            { id: "chart", label: "Analytics", icon: BarChart2 }
-          ].map((t) => (
-            <button 
-              key={t.id} 
-              onClick={() => setViewType(t.id as ViewType)} 
-              className={`px-6 py-2 rounded-full text-xs font-bold transition-all flex items-center gap-2 ${
-                viewType === t.id ? "bg-white text-[#3fa87d] shadow-sm" : "text-gray-500 hover:text-slate-700"
-              }`}
-            >
-              <t.icon size={14} />{t.label}
-            </button>
-          ))}
-        </div>
-      </nav>
-
-      <div className="flex-1 flex overflow-hidden">
-        {viewType === "card" && (
-          <>
-            <aside className="w-80 bg-white border-r border-slate-200 flex flex-col shrink-0">
-              <div className="p-6 border-b border-slate-100">
-                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4">Project Streams</p>
-                <div className="relative">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={14} />
-                  <input placeholder="Quick search..." className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-100 rounded-xl text-xs outline-none focus:ring-2 focus:ring-[#3fa87d]/20" onChange={(e) => setProjectSearch(e.target.value)} />
-                </div>
+    <div className="fixed inset-0 flex items-center mt-15 justify-center p-4 bg-slate-50">
+      <div className="h-[80vh] w-full max-w-[85%] flex flex-col bg-white rounded-3xl border-2 border-slate-200 shadow-xl overflow-hidden">
+        {/* Header */}
+        <div className="shrink-0 p-6 border-b border-slate-100">
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <h1 className="text-2xl font-bold text-slate-800">Projects Overview</h1>
+              <p className="text-slate-600 mt-1">View all projects, epics, tasks, and subtasks</p>
+            </div>
+            
+            {/* Stats Summary */}
+            <div className="flex items-center gap-4">
+              <div className="text-center px-4 py-2 bg-slate-50 rounded-xl">
+                <div className="text-2xl font-bold text-slate-800">{projectStats.totalProjects}</div>
+                <div className="text-xs text-slate-600">Projects</div>
               </div>
-              <nav className="flex-1 overflow-y-auto p-4 space-y-2 custom-scrollbar">
-                {projects.filter(p => p.name.toLowerCase().includes(projectSearch.toLowerCase())).map(project => (
-                  <button key={project._id} onClick={() => setSelectedProject(project)} className={`w-full p-4 rounded-2xl flex items-center gap-3 transition-all border ${selectedProject?._id === project._id ? "bg-[#3fa87d]/5 border-[#3fa87d]/20" : "hover:bg-slate-50 border-transparent"}`}>
-                    <div className={`w-10 h-10 rounded-xl flex items-center justify-center font-black text-[10px] ${selectedProject?._id === project._id ? "bg-[#3fa87d] text-white" : "bg-slate-100 text-slate-500"}`}>{project.key || "PJ"}</div>
-                    <div className="truncate"><p className="text-xs font-bold text-slate-800 truncate">{project.name}</p><p className="text-[9px] font-black text-slate-400 uppercase">{project.projectType}</p></div>
-                  </button>
-                ))}
-              </nav>
-            </aside>
+              <div className="text-center px-4 py-2 bg-slate-50 rounded-xl">
+                <div className="text-2xl font-bold text-slate-800">{projectStats.totalTasks}</div>
+                <div className="text-xs text-slate-600">Tasks</div>
+              </div>
+              <div className="text-center px-4 py-2 bg-[#3fa87d]/10 rounded-xl">
+                <div className="text-2xl font-bold text-[#3fa87d]">{projectStats.overallProgress}%</div>
+                <div className="text-xs text-[#3fa87d]">Progress</div>
+              </div>
+            </div>
+          </div>
 
-            <main className="flex-1 flex flex-col min-w-0 overflow-hidden bg-[#F8FAFC]">
-              {selectedProject ? (
-                <div className="h-full flex flex-col">
-                  <header className="bg-white border-b border-slate-200 p-8">
-                    <div className="flex justify-between items-center mb-8">
-                      <div>
-                        <div className="flex items-center gap-2 mb-1">
-                            <span className="bg-slate-900 text-white text-[9px] px-2 py-0.5 rounded font-black uppercase">Active Stream</span>
-                            <span className="text-slate-400 text-[9px] font-bold">KEY: {selectedProject.key}</span>
+          {/* Search and Filters */}
+          <div className="flex items-center gap-4">
+            <div className="flex-1 relative">
+              <input
+                type="text"
+                placeholder="Search projects..."
+                value={projectSearch}
+                onChange={(e) => setProjectSearch(e.target.value)}
+                className="w-full pl-10 pr-4 py-2 bg-slate-50 border-2 border-slate-100 rounded-xl text-sm outline-none focus:border-[#3fa87d]"
+              />
+              <Hash className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+            </div>
+            
+            <div className="flex items-center gap-2">
+              <select
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value)}
+                className="px-3 py-2 bg-slate-50 border-2 border-slate-100 rounded-xl text-sm outline-none focus:border-[#3fa87d]"
+              >
+                <option value="">All Status</option>
+                <option value="Backlog">Backlog</option>
+                <option value="Todo">Todo</option>
+                <option value="In Progress">In Progress</option>
+                <option value="Review">Review</option>
+                <option value="Done">Done</option>
+                <option value="Blocked">Blocked</option>
+              </select>
+              
+              <select
+                value={priorityFilter}
+                onChange={(e) => setPriorityFilter(e.target.value)}
+                className="px-3 py-2 bg-slate-50 border-2 border-slate-100 rounded-xl text-sm outline-none focus:border-[#3fa87d]"
+              >
+                <option value="">All Priority</option>
+                <option value="Lowest">Lowest</option>
+                <option value="Low">Low</option>
+                <option value="Medium">Medium</option>
+                <option value="High">High</option>
+                <option value="Highest">Highest</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        {/* Main Content */}
+        <div className="flex-1 overflow-hidden">
+          <div className="h-full flex">
+            {/* Left Sidebar - Projects List */}
+            <div className="w-80 border-r border-slate-100 overflow-y-auto">
+              <div className="p-4">
+                <h2 className="text-sm font-bold text-slate-800 mb-4">Projects</h2>
+                <div className="space-y-2">
+                  {filteredProjects.map(project => (
+                    <div
+                      key={project._id}
+                      className={`p-3 rounded-xl cursor-pointer transition-all ${
+                        selectedProject?._id === project._id
+                          ? 'bg-[#3fa87d]/10 border-2 border-[#3fa87d]'
+                          : 'bg-slate-50 border-2 border-slate-100 hover:border-slate-200'
+                      }`}
+                      onClick={() => {
+                        setSelectedProject(project);
+                        setSelectedEpic(null);
+                      }}
+                    >
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="flex items-center gap-2">
+                          <div className="w-8 h-8 bg-slate-200 rounded-lg flex items-center justify-center">
+                            <FileText size={16} className="text-slate-600" />
+                          </div>
+                          <div>
+                            <h3 className="font-bold text-slate-800">{project.name}</h3>
+                            <div className="flex items-center gap-2 text-xs text-slate-500">
+                              <span className="font-mono font-bold">{project.key}</span>
+                              <span>•</span>
+                              <span>{formatDate(project.createdAt)}</span>
+                            </div>
+                          </div>
                         </div>
-                        <h2 className="text-3xl font-black text-slate-900 tracking-tight">{selectedProject.name}</h2>
+                        <ArrowUpRight size={16} className="text-slate-400" />
                       </div>
-                      <div className="flex gap-6 items-center bg-slate-50 p-4 rounded-3xl border border-slate-100">
-                        <div className="text-right"><p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Aggregate Progress</p><p className="text-2xl font-black text-[#3fa87d]">{stats.progress}%</p></div>
-                        <ProgressRing percentage={stats.progress} />
+                      
+                      {/* Project Progress */}
+                      <div className="mt-2">
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-xs text-slate-600">Progress</span>
+                          <span className="text-xs font-bold text-slate-800">
+                            {calculateProjectProgress(project)}%
+                          </span>
+                        </div>
+                        <div className="w-full bg-slate-200 rounded-full h-2">
+                          <div
+                            className="bg-[#3fa87d] h-2 rounded-full transition-all"
+                            style={{ width: `${calculateProjectProgress(project)}%` }}
+                          />
+                        </div>
                       </div>
                     </div>
-                  </header>
+                  ))}
+                </div>
+              </div>
+            </div>
 
-                  <section className="flex-1 overflow-y-auto p-8 space-y-4 custom-scrollbar">
-                    {filteredTasks.map((task) => (
-                      <div key={task._id} onClick={() => openTaskModal(task)} className="bg-white border border-slate-200 rounded-3xl p-6 hover:shadow-xl transition-all cursor-pointer group">
-                        <div className="flex items-start justify-between mb-4">
-                          <div className="flex-1">
-                            <div className="flex items-center gap-2 mb-2">
-                                <span className="text-[10px] font-black text-[#3fa87d] bg-[#3fa87d]/10 px-2 py-0.5 rounded">{task.taskId}</span>
-                                <span className={`text-[9px] font-black px-2 py-0.5 rounded uppercase ${PRIORITY_COLORS[task.priority] || PRIORITY_COLORS.Medium}`}>{task.priority || 'Medium'}</span>
-                            </div>
-                            <h4 className="font-bold text-slate-800 text-base group-hover:text-[#3fa87d] transition-colors">{task.remarks || "No description"}</h4>
-                          </div>
-                          <div className="text-right">
-                              <p className="text-xl font-black text-slate-900">{task.completion || 0}%</p>
-                              <div className="w-28 h-2 bg-slate-100 rounded-full mt-1 overflow-hidden">
-                                <div className="h-full bg-[#3fa87d] transition-all duration-700" style={{ width: `${task.completion}%` }} />
-                              </div>
-                          </div>
-                        </div>
-                        <div className="flex items-center justify-between pt-4 border-t border-slate-50">
-                             <div className="flex gap-4 text-[10px] font-bold text-slate-400">
-                                <span className="flex items-center gap-1"><User size={12}/> {task.assigneeNames?.[0] || 'Unassigned'}</span>
-                                <span className="flex items-center gap-1"><CalendarDays size={12}/> {task.dueDate ? new Date(task.dueDate).toLocaleDateString() : 'N/A'}</span>
-                             </div>
-                             <span className="text-[10px] font-black uppercase bg-slate-900 text-white px-2 py-0.5 rounded">{task.status}</span>
-                        </div>
-                        {task.subtasks?.length > 0 && (
-                          <div className="mt-4 bg-slate-50/50 rounded-2xl p-4 border border-slate-100">
-                             {task.subtasks.slice(0, 2).map((sub: any, i: number) => <SubtaskNode key={i} sub={sub} level={0} />)}
-                          </div>
-                        )}
-                      </div>
-                    ))}
-                  </section>
+            {/* Main Area - Epics, Tasks, Subtasks */}
+            <div className="flex-1 overflow-y-auto p-6">
+              {!selectedProject ? (
+                <div className="h-full flex flex-col items-center justify-center">
+                  <Target className="text-slate-300 mb-4" size={48} />
+                  <p className="text-slate-400 font-bold mb-2">Select a project to view details</p>
+                  <p className="text-slate-400 text-sm">Projects, epics, tasks, and subtasks will appear here</p>
                 </div>
               ) : (
-                <div className="flex-1 flex flex-col items-center justify-center text-slate-300">
-                  <TrendingUp size={40} className="text-[#3fa87d] mb-4" />
-                  <h2 className="text-xl font-black text-slate-400 uppercase tracking-[0.3em]">Project Explorer</h2>
+                <div className="space-y-6">
+                  {/* Project Header */}
+                  <div className="pb-4 border-b border-slate-100">
+                    <div className="flex items-center justify-between mb-2">
+                      <div>
+                        <div className="flex items-center gap-3">
+                          <h2 className="text-xl font-bold text-slate-800">{selectedProject.name}</h2>
+                          <span className="px-2 py-1 bg-slate-100 text-slate-700 text-xs font-bold rounded-full">
+                            {selectedProject.key}
+                          </span>
+                        </div>
+                        <p className="text-slate-600 mt-1">{selectedProject.description}</p>
+                      </div>
+                      <div className="text-right">
+                        <div className="text-sm text-slate-500">Overall Progress</div>
+                        <div className="text-3xl font-bold text-[#3fa87d]">
+                          {calculateProjectProgress(selectedProject)}%
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Epics Section */}
+                  <div>
+                    <div className="flex items-center justify-between mb-4">
+                      <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+                        <Target size={20} />
+                        Epics ({getProjectEpics.length})
+                      </h3>
+                    </div>
+
+                    <div className="space-y-3">
+                      {getProjectEpics.map(epic => {
+                        const isExpanded = expandedEpics.has(epic._id);
+                        const epicTasks = tasks.filter(task => task.epicId === epic._id);
+                        
+                        return (
+                          <div key={epic._id} className="border-2 border-slate-200 rounded-2xl">
+                            {/* Epic Header */}
+                            <div 
+                              className="p-4 cursor-pointer hover:bg-slate-50 transition-colors"
+                              onClick={() => toggleEpicExpand(epic._id)}
+                            >
+                              <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-3">
+                                  {isExpanded ? (
+                                    <ChevronDown size={20} className="text-slate-500" />
+                                  ) : (
+                                    <ChevronRight size={20} className="text-slate-500" />
+                                  )}
+                                  <div>
+                                    <div className="flex items-center gap-2">
+                                      <span className="px-2 py-1 bg-purple-100 text-purple-800 text-xs font-bold rounded-full">
+                                        {epic.epicId}
+                                      </span>
+                                      <h4 className="font-bold text-slate-800">{epic.name}</h4>
+                                    </div>
+                                    <p className="text-sm text-slate-600 mt-1">{epic.description}</p>
+                                  </div>
+                                </div>
+                                
+                                <div className="flex items-center gap-4">
+                                  {/* Epic Progress */}
+                                  <div className="text-right">
+                                    <div className="text-xs text-slate-500">Progress</div>
+                                    <div className="text-lg font-bold text-slate-800">
+                                      {calculateEpicProgress(epic)}%
+                                    </div>
+                                  </div>
+                                  
+                                  {/* Tasks Count */}
+                                  <div className="text-right">
+                                    <div className="text-xs text-slate-500">Tasks</div>
+                                    <div className="text-lg font-bold text-slate-800">
+                                      {epicTasks.length}
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* Tasks List (if expanded) */}
+                            {isExpanded && (
+                              <div className="p-4 pt-0">
+                                <div className="space-y-3 mt-3">
+                                  {epicTasks.length === 0 ? (
+                                    <div className="p-4 text-center border-2 border-dashed border-slate-100 rounded-xl">
+                                      <ClipboardCheck className="mx-auto text-slate-300 mb-2" size={24} />
+                                      <p className="text-slate-400">No tasks in this epic</p>
+                                    </div>
+                                  ) : (
+                                    epicTasks.map(task => (
+                                      <TaskCard
+                                        key={task._id}
+                                        task={task}
+                                        isExpanded={expandedTasks.has(task._id)}
+                                        onToggle={() => toggleTaskExpand(task._id)}
+                                        calculateProgress={calculateTaskProgress}
+                                        getStatusColor={getStatusColor}
+                                        getPriorityColor={getPriorityColor}
+                                        getSubtaskStatusColor={getSubtaskStatusColor}
+                                        getIssueTypeColor={getIssueTypeColor}
+                                        getIssueTypeIcon={getIssueTypeIcon}
+                                        getAssigneeNames={() => getAssigneeNames(task)}
+                                        getReporterNames={() => getReporterNames(task)}
+                                        formatDate={formatDate}
+                                      />
+                                    ))
+                                  )}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+
+                      {/* If no epics, show tasks directly */}
+                      {getProjectEpics.length === 0 && (
+                        <div className="space-y-3">
+                          {getFilteredTasks.map(task => (
+                            <TaskCard
+                              key={task._id}
+                              task={task}
+                              isExpanded={expandedTasks.has(task._id)}
+                              onToggle={() => toggleTaskExpand(task._id)}
+                              calculateProgress={calculateTaskProgress}
+                              getStatusColor={getStatusColor}
+                              getPriorityColor={getPriorityColor}
+                              getSubtaskStatusColor={getSubtaskStatusColor}
+                              getIssueTypeColor={getIssueTypeColor}
+                              getIssueTypeIcon={getIssueTypeIcon}
+                              getAssigneeNames={() => getAssigneeNames(task)}
+                              getReporterNames={() => getReporterNames(task)}
+                              formatDate={formatDate}
+                            />
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
                 </div>
               )}
-            </main>
-          </>
-        )}
-
-        {viewType === "board" && <main className="flex-1 overflow-y-auto p-8"><TaskBoardView tasks={tasks} openTaskModal={openTaskModal} onTaskStatusChange={onTaskStatusChange} /></main>}
-        {viewType === "chart" && <main className="flex-1 overflow-y-auto p-8"><TaskChartView tasks={tasks} /></main>}
+            </div>
+          </div>
+        </div>
       </div>
+    </div>
+  );
+}
 
-      {selectedTaskForModal && (
-        <TaskModal
-          task={selectedTaskForModal}
-          isOpen={isModalOpen}
-          onClose={() => setIsModalOpen(false)}
-          isEditing={isEditing}
-          draftTask={draftTask}
-          subtasks={subtasks}
-          employees={employees}
-          currentProjectPrefix={selectedProject?.key || "TASK"}
-          allTaskStatuses={ALL_STATUSES}
-          handleEdit={() => { setIsEditing(true); setDraftTask(selectedTaskForModal); }}
-          handleUpdate={handleUpdate}
-          handleDelete={() => handleDelete(selectedTaskForModal._id)}
-          cancelEdit={() => setIsEditing(false)}
-          handleDraftChange={(e: any) => setDraftTask({...draftTask, [e.target.name]: e.target.value})}
-          handleSubtaskChange={setSubtasks}
-          addSubtask={addSubtask}
-          removeSubtask={removeSubtask}
-          onToggleEdit={onToggleEdit}
-          onToggleExpansion={onToggleExpansion}
-          handleStartSprint={handleStartSprint}
-          onTaskStatusChange={onTaskStatusChange}
-          onSubtaskStatusChange={onSubtaskStatusChange}
-        />
+// Task Card Component
+interface TaskCardProps {
+  task: TaskWithSubtasks;
+  isExpanded: boolean;
+  onToggle: () => void;
+  calculateProgress: (task: TaskWithSubtasks) => number;
+  getStatusColor: (status: string) => string;
+  getPriorityColor: (priority: string) => string;
+  getSubtaskStatusColor: (status: string) => string;
+  getIssueTypeColor: (issueType: string) => string;
+  getIssueTypeIcon: (issueType: string) => React.ReactNode;
+  getAssigneeNames: () => string[];
+  getReporterNames: () => string[];
+  formatDate: (date: string) => string;
+}
+
+const TaskCard: React.FC<TaskCardProps> = ({
+  task,
+  isExpanded,
+  onToggle,
+  calculateProgress,
+  getStatusColor,
+  getPriorityColor,
+  getSubtaskStatusColor,
+  getIssueTypeColor,
+  getIssueTypeIcon,
+  getAssigneeNames,
+  getReporterNames,
+  formatDate
+}) => {
+  const progress = calculateProgress(task);
+  const assigneeNames = getAssigneeNames();
+  const reporterNames = getReporterNames();
+  
+  return (
+    <div className="border-2 border-slate-200 rounded-2xl">
+      {/* Task Header */}
+      <div 
+        className="p-4 cursor-pointer hover:bg-slate-50 transition-colors"
+        onClick={onToggle}
+      >
+        <div className="flex items-start justify-between mb-3">
+          <div className="flex flex-wrap gap-2">
+            <div className={`px-2 py-1 rounded-lg text-xs font-bold flex items-center gap-1 ${getIssueTypeColor(task.issueType)}`}>
+              {getIssueTypeIcon(task.issueType)}
+              <span>{task.issueType}</span>
+            </div>
+            <div className={`px-2 py-1 rounded-lg text-xs font-bold flex items-center gap-1 ${getStatusColor(task.status)}`}>
+              {task.status}
+            </div>
+            <div className={`px-2 py-1 rounded-lg text-xs font-bold flex items-center gap-1 ${getPriorityColor(task.priority)}`}>
+              <Flag size={10} />
+              {task.priority}
+            </div>
+          </div>
+          
+          <div className="flex items-center gap-2">
+            <div className="text-right">
+              <div className="text-xs text-slate-500">Progress</div>
+              <div className="text-sm font-bold text-slate-800">{progress}%</div>
+            </div>
+            {isExpanded ? (
+              <ChevronDown size={20} className="text-slate-500" />
+            ) : (
+              <ChevronRight size={20} className="text-slate-500" />
+            )}
+          </div>
+        </div>
+        
+        <div className="flex items-start justify-between">
+          <div className="flex-1">
+            <h4 className="font-bold text-slate-800 mb-1">{task.summary}</h4>
+            <div className="flex items-center gap-3 text-xs text-slate-500">
+              <span className="font-mono font-bold bg-slate-100 px-2 py-0.5 rounded">
+                {task.issueKey}
+              </span>
+              <span className="flex items-center gap-1">
+                <Calendar size={12} />
+                {formatDate(task.createdAt)}
+              </span>
+              {task.dueDate && (
+                <span className="flex items-center gap-1">
+                  <Clock size={12} />
+                  Due: {formatDate(task.dueDate)}
+                </span>
+              )}
+            </div>
+          </div>
+          
+          {task.storyPoints > 0 && (
+            <div className="px-3 py-1 bg-slate-100 text-slate-700 text-xs font-bold rounded-full border border-slate-200">
+              {task.storyPoints} SP
+            </div>
+          )}
+        </div>
+        
+        {/* Assignees and Reporters */}
+        {(assigneeNames.length > 0 || reporterNames.length > 0) && (
+          <div className="flex items-start gap-6 text-xs text-slate-600 mt-3">
+            {assigneeNames.length > 0 && (
+              <div>
+                <div className="text-slate-500 mb-1">Assignees:</div>
+                <div className="flex flex-wrap gap-1">
+                  {assigneeNames.map((name, index) => (
+                    <div key={index} className="flex items-center gap-1 bg-slate-100 px-2 py-1 rounded-lg">
+                      <div className="w-4 h-4 bg-slate-300 rounded-full flex items-center justify-center text-[8px] font-bold">
+                        {name.charAt(0)}
+                      </div>
+                      <span className="font-medium text-[11px]">{name}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            {reporterNames.length > 0 && (
+              <div>
+                <div className="text-slate-500 mb-1">Reporters:</div>
+                <div className="flex flex-wrap gap-1">
+                  {reporterNames.map((name, index) => (
+                    <div key={index} className="flex items-center gap-1 bg-slate-100 px-2 py-1 rounded-lg">
+                      <User size={10} className="text-slate-400" />
+                      <span className="font-medium text-[11px]">{name}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+        
+        {/* Progress Bar */}
+        <div className="mt-3">
+          <div className="w-full bg-slate-200 rounded-full h-2">
+            <div 
+              className={`h-2 rounded-full transition-all ${
+                progress === 100 ? 'bg-green-500' :
+                progress >= 50 ? 'bg-blue-500' :
+                'bg-yellow-500'
+              }`}
+              style={{ width: `${progress}%` }}
+            />
+          </div>
+        </div>
+      </div>
+      
+      {/* Subtasks (if expanded) */}
+      {isExpanded && task.subtasks && task.subtasks.length > 0 && (
+        <div className="p-4 pt-0">
+          <div className="mt-4 border-t border-slate-100 pt-4">
+            <h5 className="text-sm font-bold text-slate-700 mb-3 flex items-center gap-2">
+              <CheckSquare size={16} />
+              Subtasks ({task.subtasks.length})
+            </h5>
+            
+            <div className="space-y-3">
+              {task.subtasks.map(subtask => (
+                <div key={subtask._id} className="p-3 bg-slate-50 rounded-xl border border-slate-200">
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-3">
+                      <div className="flex items-center gap-1">
+                        {subtask.status === "Done" ? (
+                          <CheckSquare size={14} className="text-green-500" />
+                        ) : (
+                          <Square size={14} className="text-slate-400" />
+                        )}
+                        <span className="font-medium text-slate-800">{subtask.title}</span>
+                      </div>
+                      <div className={`px-2 py-0.5 text-xs font-bold rounded-full ${getSubtaskStatusColor(subtask.status)}`}>
+                        {subtask.status}
+                      </div>
+                    </div>
+                    <div className="text-sm font-bold text-slate-800">{subtask.progressPercentage}%</div>
+                  </div>
+                  
+                  <div className="flex items-center justify-between text-xs text-slate-600">
+                    <div className="flex items-center gap-1">
+                      <User size={12} className="text-slate-400" />
+                      {subtask.assigneeName}
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <CalendarDays size={12} className="text-slate-400" />
+                      Updated: {formatDate(subtask.updatedAt)}
+                    </div>
+                  </div>
+                  
+                  {/* Subtask Progress Bar */}
+                  <div className="w-full bg-slate-200 rounded-full h-1.5 mt-2">
+                    <div 
+                      className={`h-1.5 rounded-full ${
+                        subtask.status === 'Done' ? 'bg-green-500' :
+                        subtask.status === 'In Progress' ? 'bg-blue-500' :
+                        'bg-yellow-500'
+                      }`}
+                      style={{ width: `${subtask.progressPercentage}%` }}
+                    />
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
       )}
-
-      <style jsx global>{`
-        .custom-scrollbar::-webkit-scrollbar { width: 5px; }
-        .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
-        .custom-scrollbar::-webkit-scrollbar-thumb { background: #E2E8F0; border-radius: 10px; }
-      `}</style>
     </div>
   );
 };
-
-export default TasksPage;

@@ -13,20 +13,18 @@ interface IEpic extends Document {
   name: string;
   summary: string;
   description: string;
-  status: "Todo" | "In Progress" | "Review" | "Done";
+  status: "Not Started" | "Todo" | "In Progress" | "Review" | "Done";
   priority: "Low" | "Medium" | "High" | "Critical";
   startDate: Date;
   endDate: Date | null;
-  // Store owner as object with id and name
   owner: EmployeeInfo;
-  // Store assignees as array of objects with id and name
   assignees: EmployeeInfo[];
   labels: string[];
   projectId: string;
   projectName: string;
   createdBy: string;
-  createdAt: Date;
-  updatedAt: Date;
+  createdAt?: Date; // Make optional since it's auto-generated
+  updatedAt?: Date; // Make optional since it's auto-generated
   // Virtual fields
   createdAtFormatted: string;
   updatedAtFormatted: string;
@@ -66,8 +64,8 @@ const EpicSchema = new Schema<IEpic>(
     },
     status: {
       type: String,
-      enum: ["Todo", "In Progress", "Review", "Done"],
-      default: "Todo" as const,
+      enum: ["Not Started", "Todo", "In Progress", "Review", "Done"],
+      default: "Not Started" as const,
     },
     priority: {
       type: String,
@@ -132,7 +130,7 @@ const EpicSchema = new Schema<IEpic>(
     },
   },
   { 
-    timestamps: true
+    timestamps: true // This will automatically add createdAt and updatedAt
   }
 );
 
@@ -143,8 +141,11 @@ EpicSchema.index({ "owner._id": 1 });
 EpicSchema.index({ "assignees._id": 1 });
 EpicSchema.index({ labels: 1 });
 
-// Virtual for formatted dates (keep as is)
+// FIXED: Virtual for formatted dates with null checks
 EpicSchema.virtual('createdAtFormatted').get(function(this: IEpic) {
+  if (!this.createdAt) {
+    return 'N/A';
+  }
   return this.createdAt.toLocaleDateString('en-US', {
     year: 'numeric',
     month: 'short',
@@ -153,6 +154,9 @@ EpicSchema.virtual('createdAtFormatted').get(function(this: IEpic) {
 });
 
 EpicSchema.virtual('updatedAtFormatted').get(function(this: IEpic) {
+  if (!this.updatedAt) {
+    return 'N/A';
+  }
   return this.updatedAt.toLocaleDateString('en-US', {
     year: 'numeric',
     month: 'short',
@@ -161,19 +165,25 @@ EpicSchema.virtual('updatedAtFormatted').get(function(this: IEpic) {
 });
 
 EpicSchema.virtual('startDateFormatted').get(function(this: IEpic) {
-  return this.startDate ? this.startDate.toLocaleDateString('en-US', {
+  if (!this.startDate) {
+    return 'Not set';
+  }
+  return this.startDate.toLocaleDateString('en-US', {
     year: 'numeric',
     month: 'short',
     day: 'numeric'
-  }) : 'Not set';
+  });
 });
 
 EpicSchema.virtual('endDateFormatted').get(function(this: IEpic) {
-  return this.endDate ? this.endDate.toLocaleDateString('en-US', {
+  if (!this.endDate) {
+    return 'Not set';
+  }
+  return this.endDate.toLocaleDateString('en-US', {
     year: 'numeric',
     month: 'short',
     day: 'numeric'
-  }) : 'Not set';
+  });
 });
 
 EpicSchema.virtual('progress').get(function(this: IEpic) {

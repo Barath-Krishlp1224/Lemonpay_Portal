@@ -4,7 +4,7 @@ import Project from "@/models/Project";
 import mongoose from "mongoose";
 
 // Define the shape of params as a Promise for Next.js 15
-type RouteParams = Promise<{ id: string }>;
+type RouteParams = Promise<{ projectId: string }>;
 
 // Add assignee to project
 export async function POST(
@@ -14,10 +14,10 @@ export async function POST(
   try {
     await connectDB();
     
-    // Await the params to get the id
-    const { id } = await params;
+    // Await the params to get the projectId
+    const { projectId } = await params;
     
-    if (!id || !mongoose.Types.ObjectId.isValid(id)) {
+    if (!projectId || !mongoose.Types.ObjectId.isValid(projectId)) {
       return NextResponse.json({ error: "Invalid Project ID" }, { status: 400 });
     }
 
@@ -29,7 +29,7 @@ export async function POST(
     }
 
     // Find the project
-    const project = await Project.findById(id);
+    const project = await Project.findById(projectId);
     if (!project) {
       return NextResponse.json({ error: "Project not found" }, { status: 404 });
     }
@@ -67,7 +67,7 @@ export async function POST(
 
     // Update project
     const updatedProject = await Project.findByIdAndUpdate(
-      id,
+      projectId,
       {
         assigneeIds: updatedAssigneeIds,
         members: updatedMembers,
@@ -91,10 +91,10 @@ export async function DELETE(
   try {
     await connectDB();
     
-    // Await the params to get the id
-    const { id } = await params;
+    // Await the params to get the projectId
+    const { projectId } = await params;
     
-    if (!id || !mongoose.Types.ObjectId.isValid(id)) {
+    if (!projectId || !mongoose.Types.ObjectId.isValid(projectId)) {
       return NextResponse.json({ error: "Invalid Project ID" }, { status: 400 });
     }
 
@@ -106,7 +106,7 @@ export async function DELETE(
     }
 
     // Find the project
-    const project = await Project.findById(id);
+    const project = await Project.findById(projectId);
     if (!project) {
       return NextResponse.json({ error: "Project not found" }, { status: 404 });
     }
@@ -137,7 +137,7 @@ export async function DELETE(
 
     // Update project
     const updatedProject = await Project.findByIdAndUpdate(
-      id,
+      projectId,
       {
         assigneeIds: updatedAssigneeIds,
         members: updatedMembers,

@@ -2,11 +2,9 @@
 
 import React, { useState, useEffect, useMemo, useCallback } from "react";
 import { 
-  ClipboardList,
   Kanban,
   Layers,
   Search,
-  Trello,
   Filter,
   Calendar,
   User,
@@ -14,13 +12,13 @@ import {
   Clock,
   AlertCircle,
   RefreshCw,
-  Plus
+  Trello,
+  Shield,
+  Database
 } from "lucide-react";
 import { toast, ToastContainer } from "react-toastify";
 import "react-toastify/dist/ReactToastify.css";
 
-// Component Imports
-import TaskCard from "./components/TaskCard";
 import TaskModal from "./components/TaskModal";
 import TaskBoardView from "./components/TaskBoardView";
 
@@ -28,7 +26,6 @@ import TaskBoardView from "./components/TaskBoardView";
 import { Task, Subtask, Employee } from "./components/types";
 import { getAggregatedTaskData } from "./utils/aggregation";
 
-export type ViewType = "card" | "board";
 type Role = "Admin" | "Manager" | "TeamLead" | "Employee";
 
 const allTaskStatuses = [
@@ -48,7 +45,6 @@ const TasksPage: React.FC = () => {
   const [debugInfo, setDebugInfo] = useState<string>("");
 
   // --- UI Navigation ---
-  const [viewType, setViewType] = useState<ViewType>("board");
   const [searchTerm, setSearchTerm] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("");
   
@@ -65,17 +61,27 @@ const TasksPage: React.FC = () => {
     return `${process.env.NEXT_PUBLIC_API_BASE_URL || ""}${path}`;
   };
 
-  // Fetch tasks with employee filtering - UPDATED WITH BETTER DEBUGGING
+  // Helper function to get auth headers
+  const getAuthHeaders = () => {
+    return {
+      "x-user-id": currentUserId,
+      "x-user-name": currentUserName,
+      "x-user-role": currentUserRole
+    };
+  };
+
+  // Fetch tasks with employee filtering
   const fetchTasks = useCallback(async () => {
     try {
       console.log("Fetching tasks...");
       setDebugInfo("Fetching tasks from API...");
       
-      const res = await fetch(getApiUrl("/api/tasks"));
+      const res = await fetch(getApiUrl("/api/tasks"), {
+        headers: getAuthHeaders()
+      });
       const data = await res.json();
       
-      console.log("API Response:", data);
-      setDebugInfo(`API Response: ${JSON.stringify(data).substring(0, 100)}...`);
+      console.log("API Response status:", res.status);
       
       if (res.ok) {
         let taskData: Task[] = [];
@@ -93,68 +99,60 @@ const TasksPage: React.FC = () => {
           taskData = [data.task];
         }
         
-        console.log(`Parsed ${taskData.length} tasks:`, taskData);
-        setDebugInfo(`Parsed ${taskData.length} tasks from API`);
+        console.log(`Parsed ${taskData.length} tasks from API`);
         
-        // Filter tasks based on user role
-        let filteredTasks = taskData || [];
-        
-        if (currentUserRole === "Employee" && currentUserName) {
-          console.log("Filtering tasks for employee:", currentUserName);
-          filteredTasks = filteredTasks.filter((task: Task) => {
-            const assigneeNames = task.assigneeNames || [];
-            const assigneeIds = task.assigneeIds || [];
-            
-            console.log(`Task ${task.taskId || task._id}:`, {
-              assigneeNames,
-              assigneeIds,
-              currentUserName,
-              currentUserId
-            });
-            
-            const assigneeMatches = assigneeNames.some(
-              name => name.toLowerCase() === currentUserName.toLowerCase()
-            );
-            
-            const assigneeIdMatches = assigneeIds.some(
-              id => id === currentUserId
-            );
-            
-            const isAssigned = assigneeMatches || assigneeIdMatches;
-            console.log(`Task ${task.taskId || task._id} assigned to user: ${isAssigned}`);
-            
-            return isAssigned;
-          });
+        // Process tasks to ensure proper task name display and subtasks
+        taskData = taskData.map(task => {
+          // Ensure subtasks is always an array and has proper structure
+          let taskSubtasks: Subtask[] = [];
+          if (task.subtasks && Array.isArray(task.subtasks)) {
+            taskSubtasks = task.subtasks.map(sub => ({
+              ...sub,
+              id: sub.id || `sub-${Math.random().toString(36).substr(2, 9)}`,
+              status: sub.status || "To Do",
+              completion: sub.completion || 0,
+              remarks: sub.remarks || "",
+              timeSpent: sub.timeSpent || "0",
+              storyPoints: sub.storyPoints || 0,
+              assigneeName: sub.assigneeName || "",
+              subtasks: sub.subtasks || []
+            }));
+          }
           
-          console.log(`Filtered to ${filteredTasks.length} tasks for employee`);
-          setDebugInfo(`Filtered to ${filteredTasks.length} tasks for employee ${currentUserName}`);
-        } else {
-          console.log(`Showing all ${filteredTasks.length} tasks for ${currentUserRole}`);
-          setDebugInfo(`Showing all ${filteredTasks.length} tasks for ${currentUserRole}`);
+          return {
+            ...task,
+            subtasks: taskSubtasks,
+            taskDisplayName: task.summary || task.title || task.name || `Task ${task.taskId || task._id?.substring(0, 8)}`,
+            name: task.summary || task.title || task.name || `Task ${task.taskId || task._id?.substring(0, 8)}`
+          };
+        });
+        
+        console.log('Sample task subtasks count:', taskData[0]?.subtasks?.length || 0);
+        if (taskData.length > 0 && taskData[0].subtasks) {
+          console.log('First task subtasks sample:', taskData[0].subtasks.slice(0, 1));
         }
         
-        setTasks(filteredTasks);
+        setTasks(taskData);
+        setDebugInfo(`Loaded ${taskData.length} total tasks`);
       } else {
         console.error("API Error:", data);
-        setDebugInfo(`API Error: ${data.error || data.message || "Unknown error"}`);
         toast.error(`Failed to load tasks: ${data.error || data.message || "Unknown error"}`);
       }
     } catch (err: any) { 
       console.error("Failed to fetch tasks:", err);
-      setDebugInfo(`Fetch error: ${err.message}`);
       toast.error("Database connection lost"); 
     } finally { 
       setLoading(false); 
     }
-  }, [currentUserRole, currentUserName, currentUserId]);
+  }, []);
 
   const fetchEmployees = async () => {
     try {
-      console.log("Fetching employees...");
-      const res = await fetch(getApiUrl("/api/employees"));
+      const res = await fetch(getApiUrl("/api/employees"), {
+        headers: getAuthHeaders()
+      });
       const data = await res.json();
       if (res.ok && data.success) {
-        console.log(`Fetched ${data.employees?.length || 0} employees`);
         setEmployees(data.employees || []);
       }
     } catch (err) {
@@ -212,11 +210,58 @@ const TasksPage: React.FC = () => {
   };
 
   const openTaskModal = (task: Task) => {
+    // Check if employee is assigned to this task
+    if (currentUserRole === "Employee") {
+      const isAssigned = task.assigneeNames?.some(
+        name => name.toLowerCase() === currentUserName.toLowerCase()
+      ) || task.assigneeIds?.some(id => id === currentUserId);
+      
+      if (!isAssigned) {
+        toast.error("You are not assigned to this task");
+        return;
+      }
+    }
+    
     const aggregated = getAggregatedTaskData(task);
-    setSelectedTaskForModal(aggregated);
-    setSubtasks(aggregated.subtasks || []);
-    setCurrentProjectPrefix(aggregated.taskId?.split('-')[0] || "TASK");
-    setDraftTask(aggregated);
+    
+    console.log('Opening task modal for:', {
+      taskId: task._id,
+      originalSubtasks: task.subtasks,
+      aggregatedSubtasks: aggregated.subtasks
+    });
+    
+    // Ensure subtasks are properly formatted
+    let taskSubtasks = task.subtasks || [];
+    if (taskSubtasks && taskSubtasks.length > 0) {
+      // Ensure each subtask has required fields
+      taskSubtasks = taskSubtasks.map(sub => ({
+        ...sub,
+        id: sub.id || `sub-${Math.random().toString(36).substr(2, 9)}`,
+        status: sub.status || "To Do",
+        completion: sub.completion || 0,
+        remarks: sub.remarks || "",
+        timeSpent: sub.timeSpent || "0",
+        storyPoints: sub.storyPoints || 0,
+        assigneeName: sub.assigneeName || "",
+        subtasks: sub.subtasks || []
+      }));
+    }
+    
+    // CRITICAL FIX: DO NOT FILTER SUBTASKS FOR EMPLOYEES
+    // All users should see ALL subtasks, regardless of assignment
+    // Only editing permissions will be restricted based on assignee
+    const processedTask = {
+      ...aggregated,
+      name: aggregated.summary || aggregated.title || aggregated.name || `Task ${aggregated.taskId || aggregated._id?.substring(0, 8)}`,
+      taskDisplayName: aggregated.summary || aggregated.title || aggregated.name || `Task ${aggregated.taskId || aggregated._id?.substring(0, 8)}`,
+      // Always include all subtasks for all users
+      subtasks: taskSubtasks
+    };
+    
+    setSelectedTaskForModal(processedTask);
+    setSubtasks(taskSubtasks); // Pass ALL subtasks
+    setCurrentProjectPrefix(processedTask.taskId?.split('-')[0] || "TASK");
+    setDraftTask(processedTask);
     setIsModalOpen(true);
     setIsEditing(false);
   };
@@ -229,44 +274,144 @@ const TasksPage: React.FC = () => {
 
   const onTaskStatusChange = useCallback(async (taskId: string, newStatus: string) => {
     try {
+      const task = tasks.find(t => t._id === taskId);
+      if (!task) {
+        toast.error("Task not found");
+        return;
+      }
+
+      // Check permission for employees
+      if (currentUserRole === "Employee") {
+        const isAssigned = task.assigneeNames?.some(
+          name => name.toLowerCase() === currentUserName.toLowerCase()
+        ) || task.assigneeIds?.some(id => id === currentUserId);
+        
+        if (!isAssigned) {
+          toast.error("You are not authorized to change this task's status");
+          return;
+        }
+      }
+
       const res = await fetch(getApiUrl(`/api/tasks/${taskId}`), {
         method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: newStatus }),
+        headers: { 
+          "Content-Type": "application/json",
+          ...getAuthHeaders()
+        },
+        body: JSON.stringify({ 
+          status: newStatus,
+          userId: currentUserId,
+          userName: currentUserName,
+          userRole: currentUserRole
+        }),
       });
+      
       if (res.ok) { 
         await fetchTasks();
         toast.info(`Status updated to: ${newStatus}`); 
+      } else {
+        const errorData = await res.json();
+        console.error("Status update error:", errorData);
+        
+        if (errorData.code === 'PERMISSION_DENIED') {
+          toast.error("Access denied. You don't have permission to update this task.");
+        } else {
+          toast.error(errorData.error || "Failed to update status");
+        }
       }
     } catch (err) { 
       console.error("Failed to update task status:", err);
       toast.error("Update failed"); 
     }
-  }, [fetchTasks]);
+  }, [tasks, currentUserRole, currentUserName, currentUserId, fetchTasks]);
 
   const onSubtaskStatusChange = useCallback(async (taskId: string, subtaskId: string | null, newStatus: string) => {
     if (!subtaskId) return;
     
+    const targetTask = tasks.find(t => t._id === taskId);
+    if (!targetTask) {
+      toast.error("Task not found");
+      return;
+    }
+
+    // Check permission for employees
+    if (currentUserRole === "Employee") {
+      const isAssigned = targetTask.assigneeNames?.some(
+        name => name.toLowerCase() === currentUserName.toLowerCase()
+      ) || targetTask.assigneeIds?.some(id => id === currentUserId);
+      
+      if (!isAssigned) {
+        toast.error("You are not assigned to this task");
+        return;
+      }
+
+      // Find the specific subtask
+      const findSubtask = (subtasks: Subtask[]): Subtask | null => {
+        for (const sub of subtasks) {
+          if (sub.id === subtaskId) return sub;
+          if (sub.subtasks) {
+            const found = findSubtask(sub.subtasks);
+            if (found) return found;
+          }
+        }
+        return null;
+      };
+
+      const subtask = findSubtask(targetTask.subtasks || []);
+      if (!subtask) {
+        toast.error("Subtask not found");
+        return;
+      }
+
+      // Check if subtask is assigned to current employee
+      if (subtask.assigneeName?.toLowerCase() !== currentUserName.toLowerCase() && subtask.assigneeName) {
+        toast.error("You are not assigned to this subtask");
+        return;
+      }
+    }
+    
     const updateRecursive = (subs: Subtask[]): Subtask[] => 
       subs.map(s => s.id === subtaskId ? { ...s, status: newStatus } : { ...s, subtasks: updateRecursive(s.subtasks || []) });
     
-    const targetTask = tasks.find(t => t._id === taskId);
-    if (!targetTask) return;
-    
     try {
-      await fetch(getApiUrl(`/api/tasks/${taskId}`), {
+      const updatedSubtasks = updateRecursive(targetTask.subtasks || []);
+      
+      const res = await fetch(getApiUrl(`/api/tasks/${taskId}`), {
         method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ subtasks: updateRecursive(targetTask.subtasks || []) }),
+        headers: { 
+          "Content-Type": "application/json",
+          ...getAuthHeaders()
+        },
+        body: JSON.stringify({ 
+          subtasks: updatedSubtasks,
+          userId: currentUserId,
+          userName: currentUserName,
+          userRole: currentUserRole
+        }),
       });
-      await fetchTasks();
-      toast.success("Subtask status updated");
+      
+      if (res.ok) {
+        await fetchTasks();
+        toast.success("Subtask status updated");
+      } else {
+        const errorData = await res.json();
+        console.error("Subtask update error:", errorData);
+        
+        if (errorData.code === 'PERMISSION_DENIED') {
+          toast.error("Access denied. You don't have permission to update this subtask.");
+        } else if (errorData.unauthorizedFields) {
+          toast.error(`You can only update: ${errorData.unauthorizedFields.join(', ')}`);
+        } else {
+          toast.error(errorData.error || "Failed to update subtask");
+        }
+      }
     } catch (err) {
       console.error("Failed to update subtask status:", err);
       toast.error("Update failed");
     }
-  }, [tasks, fetchTasks]);
+  }, [tasks, currentUserRole, currentUserName, currentUserId, fetchTasks]);
 
+  // Fixed handleUpdate function
   const handleUpdate = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedTaskForModal?._id) return;
@@ -284,21 +429,78 @@ const TasksPage: React.FC = () => {
         }
       }
       
+      console.log('Current subtasks state:', subtasks);
+      console.log('Current draftTask:', draftTask);
+      
+      // Prepare the request body
+      const requestBody: any = {
+        // Add user info to body for API verification
+        userId: currentUserId,
+        userName: currentUserName,
+        userRole: currentUserRole,
+        updatedAt: new Date().toISOString()
+      };
+      
+      // CRITICAL: Always include subtasks, even if empty array
+      if (subtasks && Array.isArray(subtasks)) {
+        console.log('Including subtasks in request:', subtasks.length);
+        console.log('Subtasks structure:', JSON.stringify(subtasks, null, 2));
+        requestBody.subtasks = subtasks;
+      } else {
+        console.log('No subtasks found, sending empty array');
+        requestBody.subtasks = [];
+      }
+      
+      // Include fields from draftTask
+      const fieldsToInclude = ['status', 'completion', 'remarks', 'summary', 'assigneeNames', 'dueDate', 'description'];
+      
+      fieldsToInclude.forEach(field => {
+        if (draftTask[field as keyof Task] !== undefined) {
+          requestBody[field] = draftTask[field as keyof Task];
+        }
+      });
+      
+      // For non-employees, include all fields except system fields
+      if (currentUserRole !== "Employee") {
+        Object.keys(draftTask).forEach(key => {
+          if (draftTask[key as keyof Task] !== undefined && !['_id', '__v', 'createdAt', 'updatedAt', 'createdBy', 'taskDisplayName'].includes(key)) {
+            requestBody[key] = draftTask[key as keyof Task];
+          }
+        });
+      }
+      
+      console.log("Sending update request for task:", selectedTaskForModal._id);
+      console.log("Request body keys:", Object.keys(requestBody));
+      console.log("Subtasks being sent:", requestBody.subtasks?.length || 0);
+      console.log("Full request body:", JSON.stringify(requestBody, null, 2));
+      
       const res = await fetch(getApiUrl(`/api/tasks/${selectedTaskForModal._id}`), {
         method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...draftTask, subtasks }),
+        headers: { 
+          "Content-Type": "application/json",
+          ...getAuthHeaders()
+        },
+        body: JSON.stringify(requestBody),
       });
+      
+      const responseData = await res.json();
       
       if (res.ok) {
         toast.success("Task updated successfully");
         await fetchTasks();
         closeTaskModal();
       } else {
-        const errorData = await res.json();
-        toast.error(errorData.error || "Update failed");
+        console.error("Update error details:", responseData);
+        
+        if (responseData.code === 'PERMISSION_DENIED') {
+          toast.error("Access denied. You don't have permission to update this task.");
+        } else if (responseData.unauthorizedFields) {
+          toast.error(`You can only update: ${responseData.unauthorizedFields.join(', ')}`);
+        } else {
+          toast.error(responseData.error || "Update failed");
+        }
       }
-    } catch (err) { 
+    } catch (err: any) { 
       console.error("Failed to update task:", err);
       toast.error("Sync failed"); 
     }
@@ -313,11 +515,24 @@ const TasksPage: React.FC = () => {
     if (!window.confirm("Permanent delete? This cannot be undone.")) return;
     
     try {
-      const res = await fetch(getApiUrl(`/api/tasks/${id}`), { method: "DELETE" });
+      const res = await fetch(getApiUrl(`/api/tasks/${id}`), { 
+        method: "DELETE",
+        headers: getAuthHeaders()
+      });
+      
       if (res.ok) {
         toast.success("Task removed");
         await fetchTasks();
         closeTaskModal();
+      } else {
+        const errorData = await res.json();
+        console.error("Delete error:", errorData);
+        
+        if (errorData.code === 'PERMISSION_DENIED') {
+          toast.error("Access denied. You don't have permission to delete tasks.");
+        } else {
+          toast.error(errorData.error || "Delete failed");
+        }
       }
     } catch (err) { 
       console.error("Failed to delete task:", err);
@@ -332,13 +547,10 @@ const TasksPage: React.FC = () => {
       const name = localStorage.getItem("userName");
       const id = localStorage.getItem("userId");
       
-      console.log("LocalStorage data:", { role, name, id });
-      
       setCurrentUserRole(role === "Admin" || role === "Manager" || role === "TeamLead" ? role : "Employee");
       setCurrentUserName(name || "");
       setCurrentUserId(id || "");
       
-      // Set debug info
       setDebugInfo(`User: ${name} (${role}), ID: ${id}`);
     }
   }, []);
@@ -346,47 +558,38 @@ const TasksPage: React.FC = () => {
   // Fetch data
   useEffect(() => {
     const init = async () => {
-      console.log("Initializing page...");
       setLoading(true);
       await Promise.all([fetchTasks(), fetchEmployees()]);
-      console.log("Initialization complete");
     };
     init();
   }, [fetchTasks]);
 
-  // Filter tasks based on role and search
+  // Filter tasks based on role and search - with proper task name display
   const filteredTasks = useMemo(() => {
-    console.log("Filtering tasks...");
-    console.log("Total tasks:", tasks.length);
     console.log("Current user:", { currentUserRole, currentUserName, currentUserId });
     
-    let base = tasks;
+    let base = tasks.map(task => ({
+      ...task,
+      name: task.summary || task.title || task.name || `Task ${task.taskId || task._id?.substring(0, 8)}`,
+      taskDisplayName: task.summary || task.title || task.name || `Task ${task.taskId || task._id?.substring(0, 8)}`
+    }));
     
     // Apply role-based filtering
     if (currentUserRole === "Employee" && currentUserName) {
       base = base.filter(t => {
-        const assigneeNames = t.assigneeNames || [];
-        const assigneeIds = t.assigneeIds || [];
-        
-        const assigneeMatches = assigneeNames.some(
+        const assigneeMatches = t.assigneeNames?.some(
           name => name.toLowerCase() === currentUserName.toLowerCase()
         );
-        const assigneeIdMatches = assigneeIds.some(
-          id => id === currentUserId
-        );
+        const assigneeIdMatches = t.assigneeIds?.some(id => id === currentUserId);
         
         const isAssigned = assigneeMatches || assigneeIdMatches;
-        
-        if (isAssigned) {
-          console.log(`Task ${t.taskId || t._id} assigned to user`);
-        }
         
         return isAssigned;
       });
       
       console.log(`Employee view: ${base.length} tasks after filtering`);
     } else {
-      console.log(`Admin/Manager view: ${base.length} tasks`);
+      console.log(`${currentUserRole} view: ${base.length} tasks`);
     }
     
     // Apply search filter
@@ -396,23 +599,26 @@ const TasksPage: React.FC = () => {
         (t.remarks?.toLowerCase() || "").includes(s) || 
         (t.taskId?.toLowerCase() || "").includes(s) || 
         (t.project?.toLowerCase() || "").includes(s) ||
-        (t.summary?.toLowerCase() || "").includes(s)
+        (t.summary?.toLowerCase() || "").includes(s) ||
+        (t.title?.toLowerCase() || "").includes(s) ||
+        (t.name?.toLowerCase() || "").includes(s)
       );
-      console.log(`After search: ${base.length} tasks`);
     }
     
     // Apply status filter
     if (statusFilter) {
       base = base.filter(t => t.status === statusFilter);
-      console.log(`After status filter: ${base.length} tasks`);
     }
     
-    console.log(`Final filtered tasks: ${base.length}`);
     return base;
   }, [tasks, currentUserRole, currentUserName, currentUserId, searchTerm, statusFilter]);
 
-  // Stats for employee dashboard
+  // Stats for employee dashboard (only their assigned tasks)
   const taskStats = useMemo(() => {
+    if (currentUserRole !== "Employee") {
+      return { total: 0, completed: 0, inProgress: 0, todo: 0 };
+    }
+    
     const employeeTasks = filteredTasks.filter(t => {
       const assigneeMatches = t.assigneeNames?.some(
         name => name.toLowerCase() === currentUserName.toLowerCase()
@@ -427,7 +633,7 @@ const TasksPage: React.FC = () => {
       inProgress: employeeTasks.filter(t => t.status === "In Progress").length,
       todo: employeeTasks.filter(t => t.status === "To Do" || t.status === "Backlog").length,
     };
-  }, [filteredTasks, currentUserName, currentUserId]);
+  }, [filteredTasks, currentUserRole, currentUserName, currentUserId]);
 
   // Add a manual refresh button for debugging
   const handleRefresh = async () => {
@@ -452,25 +658,12 @@ const TasksPage: React.FC = () => {
     <div className="flex min-h-screen bg-[#F8FAFC]">
       <ToastContainer position="top-right" autoClose={2000} theme="dark" /> 
       
-      {/* Simplified Navigation - Toggle between Board and List */}
+      {/* Navigation with user role indicator */}
       <nav className="fixed top-25 left-1/2 transform -translate-x-1/2 bg-white/90 backdrop-blur-2xl shadow-[0_25px_60px_-15px_rgba(0,0,0,0.15)] rounded-full px-8 py-4 flex items-center space-x-8 z-[100] border border-white/50">
-        <button 
-          onClick={() => setViewType("board")}
-          className={`flex items-center gap-2 px-4 py-2 rounded-full transition-all ${viewType === 'board' ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-400 hover:text-blue-500'}`}
-        >
+        <div className="flex items-center gap-2 px-4 py-2 rounded-full bg-blue-600 text-white shadow-lg">
           <Kanban size={18} />
           <span className="text-xs font-bold uppercase tracking-wider">Board View</span>
-        </button>
-
-        <div className="h-6 w-px bg-slate-200" />
-
-        <button 
-          onClick={() => setViewType("card")}
-          className={`flex items-center gap-2 px-4 py-2 rounded-full transition-all ${viewType === 'card' ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-400 hover:text-blue-500'}`}
-        >
-          <ClipboardList size={18} />
-          <span className="text-xs font-bold uppercase tracking-wider">List View</span>
-        </button>
+        </div>
 
         <div className="h-6 w-px bg-slate-200" />
 
@@ -481,62 +674,39 @@ const TasksPage: React.FC = () => {
             placeholder="Search tasks..."
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
-            className="pl-10 pr-4 py-2 bg-slate-100 rounded-full text-xs font-medium focus:outline-none focus:ring-2 focus:ring-blue-500/20 w-48 transition-all"
+            className="pl-10 pr-4 py-2 bg-slate-100 placeholder-gray-600 rounded-full text-xs font-medium focus:outline-none focus:ring-2 focus:ring-blue-500/20 w-48 transition-all"
           />
         </div>
-        
         <div className="relative flex items-center">
           <Filter className="absolute left-3 w-4 h-4 text-slate-400" />
           <select 
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value)}
-            className="pl-10 pr-4 py-2 bg-slate-100 rounded-full text-xs font-medium focus:outline-none focus:ring-2 focus:ring-blue-500/20 w-36 transition-all appearance-none"
+            
+            className="pl-10 pr-8 py-2 bg-slate-100 text-slate-600 rounded-full text-xs font-medium focus:outline-none focus:ring-2 focus:ring-blue-500/20 w-36 transition-all appearance-none cursor-pointer"
           >
-            <option value="">All Status</option>
-            <option value="To Do">To Do</option>
-            <option value="In Progress">In Progress</option>
-            <option value="Completed">Completed</option>
-            <option value="Paused">Paused</option>
+            <option value="" className="text-slate-500">All Status</option>
+            <option value="To Do" className="text-slate-700">To Do</option>
+            <option value="In Progress" className="text-slate-700">In Progress</option>
+            <option value="Completed" className="text-slate-700">Completed</option>
+            <option value="Paused" className="text-slate-700">Paused</option>
           </select>
+          {/* Optional: Chevron icon since appearance-none hides the default one */}
+          <div className="absolute right-3 pointer-events-none">
+            <svg className="w-3 h-3 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" />
+            </svg>
+          </div>
         </div>
 
-        <button 
-          onClick={handleRefresh}
-          className="flex items-center gap-2 px-4 py-2 bg-slate-800 text-white rounded-full hover:bg-slate-900 transition-colors"
-          title="Refresh tasks"
-        >
-          <RefreshCw size={16} />
-          <span className="text-xs font-bold">Refresh</span>
-        </button>
+       
       </nav>
 
-      <main className="flex-1 min-h-screen pb-20 px-6 sm:px-10 lg:px-16 pt-44">
-        <div className="max-w-[1750px] mx-auto">
+      <main className="flex-1 min-h-screen pb-20 px-4 sm:px-6 lg:px-8 pt-44 w-full">
+        <div className="mx-auto w-full max-w-none px-4">
           <div className="space-y-12">
-            {/* Debug Info - Only show in development */}
-            {process.env.NODE_ENV === 'development' && (
-              <div className="bg-yellow-50 border border-yellow-200 rounded-2xl p-4 mb-6">
-                <div className="flex items-center justify-between mb-2">
-                  <h4 className="text-sm font-bold text-yellow-800">Debug Information</h4>
-                  <button 
-                    onClick={() => console.log({ tasks, filteredTasks, currentUserRole, currentUserName, currentUserId })}
-                    className="text-xs text-yellow-600 hover:text-yellow-800"
-                  >
-                    Log to Console
-                  </button>
-                </div>
-                <div className="text-xs text-yellow-700 space-y-1">
-                  <div>Total Tasks: {tasks.length}</div>
-                  <div>Filtered Tasks: {filteredTasks.length}</div>
-                  <div>User: {currentUserName} ({currentUserRole})</div>
-                  <div>User ID: {currentUserId}</div>
-                  <div>Debug: {debugInfo}</div>
-                </div>
-              </div>
-            )}
-
             {/* Header with User Stats */}
-            <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-10 px-4">
+            <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-10 px-2">
               <div className="space-y-3">
                 <div className="flex items-center gap-3 text-blue-600">
                   <Layers size={22} className="animate-pulse" />
@@ -546,14 +716,12 @@ const TasksPage: React.FC = () => {
                 </div>
                 <div className="flex items-center gap-4">
                   <h1 className="text-6xl font-black text-slate-900 tracking-tighter">
-                    {currentUserRole === "Employee" ? "My Tasks" : "Workspace"}
+                    {currentUserRole === "Employee" ? "My Tasks" : "Task Board"}
                   </h1>
-                  {currentUserRole === "Employee" && (
-                    <div className="flex items-center gap-2 bg-blue-50 px-4 py-2 rounded-full">
-                      <User size={16} className="text-blue-600" />
-                      <span className="text-sm font-bold text-blue-800">{currentUserName}</span>
-                    </div>
-                  )}
+                  <div className="flex items-center gap-1 bg-slate-100 px-3 py-1.5 rounded-full">
+                    <User size={14} className="text-slate-500" />
+                    <span className="text-sm font-bold text-slate-700">{currentUserName}</span>
+                  </div>
                 </div>
                 <p className="text-slate-500 font-medium text-xl">
                   {currentUserRole === "Employee" 
@@ -563,7 +731,7 @@ const TasksPage: React.FC = () => {
                 </p>
               </div>
               
-              {currentUserRole === "Employee" && (
+              {currentUserRole === "Employee" && taskStats.total > 0 && (
                 <div className="grid grid-cols-3 gap-4">
                   <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm">
                     <div className="flex items-center gap-2">
@@ -591,7 +759,7 @@ const TasksPage: React.FC = () => {
             </div>
 
             {filteredTasks.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-40 bg-white rounded-[4rem] border-2 border-dashed border-slate-100 shadow-inner text-center">
+              <div className="flex flex-col items-center justify-center py-40 bg-white rounded-[4rem] border-2 border-dashed border-slate-100 shadow-inner text-center w-full">
                 <Trello className="w-24 h-24 text-slate-100 mb-8" />
                 <h3 className="text-3xl font-black text-slate-300 uppercase tracking-widest">
                   {currentUserRole === "Employee" ? "No Tasks Assigned" : "No Tasks Found"}
@@ -616,10 +784,13 @@ const TasksPage: React.FC = () => {
                 </div>
               </div>
             ) : (
-              <div className="animate-in fade-in slide-in-from-bottom-6 duration-700">
-                <div className="flex items-center justify-between mb-6">
+              <div className="animate-in fade-in slide-in-from-bottom-6 duration-700 w-full">
+                <div className="flex items-center justify-between mb-6 px-2">
                   <div className="text-sm text-slate-500">
-                    Showing {filteredTasks.length} of {tasks.length} tasks
+                    {currentUserRole === "Employee" 
+                      ? `Showing ${filteredTasks.length} tasks assigned to you`
+                      : `Showing ${filteredTasks.length} of ${tasks.length} tasks`
+                    }
                   </div>
                   <button 
                     onClick={handleRefresh}
@@ -630,13 +801,20 @@ const TasksPage: React.FC = () => {
                   </button>
                 </div>
                 
-                {viewType === "card" ? (
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-10">
-                    {filteredTasks.map((t) => <TaskCard key={t._id} task={t} onViewDetails={openTaskModal} />)}
-                  </div>
-                ) : (
-                  <TaskBoardView tasks={filteredTasks} openTaskModal={openTaskModal} onTaskStatusChange={onTaskStatusChange} />
-                )}
+                {/* Task Board View with fixed height and scroll */}
+                <div className="w-full">
+                  <TaskBoardView 
+                    tasks={filteredTasks} 
+                    openTaskModal={openTaskModal} 
+                    onTaskStatusChange={onTaskStatusChange} 
+                    currentUserRole={currentUserRole}
+                    currentUserName={currentUserName}
+                    currentUserId={currentUserId}
+                    containerHeight="70vh" // Fixed height for the entire board
+                    columnMaxHeight="60vh" // Max height for individual columns
+                    visibleRows={2} // Show only 2 tasks initially
+                  />
+                </div>
               </div>
             )}
 
@@ -654,13 +832,14 @@ const TasksPage: React.FC = () => {
                 handleEdit={() => setIsEditing(true)} 
                 handleDelete={handleDelete} 
                 handleUpdate={handleUpdate} 
-                handleStartSprint={() => {}} // Placeholder if needed
+                handleStartSprint={() => {}} 
                 cancelEdit={() => setIsEditing(false)} 
                 handleDraftChange={(e) => {
                   const { name, value } = e.target;
                   setDraftTask(prev => ({ ...prev, [name]: value }));
                 }} 
                 handleSubtaskChange={(path, field, val) => setSubtasks(prev => updateSubtaskState(prev, path, (s) => ({ ...s, [field]: val })))} 
+                
                 addSubtask={(path) => setSubtasks(prev => updateSubtaskState(prev, path, () => null, 'add'))} 
                 removeSubtask={(path) => setSubtasks(prev => updateSubtaskState(prev, path, () => null, 'remove'))} 
                 onToggleEdit={(path) => setSubtasks(prev => updateSubtaskState(prev, path, (s) => ({ ...s, isEditing: !s.isEditing })))} 

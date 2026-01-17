@@ -2,9 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import connectDB from '@/lib/mongodb';
 import Task from '@/models/Task';
 
-// 1. The key must be 'id' because your folder is [id]
-// 2. The object must be a Promise for Next.js 15
-type RouteParams = Promise<{ id: string }>;
+// Use projectId to match the folder name: [projectId]
+type RouteParams = Promise<{ projectId: string }>;
 
 export async function POST(
   request: NextRequest,
@@ -14,7 +13,7 @@ export async function POST(
     await connectDB();
     
     // Await the params to get the project id from the URL
-    const { id } = await params;
+    const { projectId } = await params; // Changed from id to projectId
     
     const body = await request.json();
     const { operation, tasks } = body;
@@ -30,10 +29,10 @@ export async function POST(
     
     switch (operation) {
       case 'create':
-        // Add projectId to each task using the 'id' from params
+        // Add projectId to each task using the 'projectId' from params
         const tasksWithProjectId = tasks.map(task => ({
           ...task,
-          projectId: id
+          projectId: projectId // Changed from id to projectId
         }));
         result = await Task.insertMany(tasksWithProjectId);
         break;
@@ -43,7 +42,7 @@ export async function POST(
         const updateOperations = tasks.map(task => ({
           updateOne: {
             filter: { 
-              projectId: id,
+              projectId: projectId, // Changed from id to projectId
               taskId: task.taskId 
             },
             update: { $set: task }
@@ -57,7 +56,7 @@ export async function POST(
         const statusUpdateOps = tasks.map(task => ({
           updateOne: {
             filter: { 
-              projectId: id,
+              projectId: projectId, // Changed from id to projectId
               taskId: task.taskId 
             },
             update: { $set: { status: task.status } }

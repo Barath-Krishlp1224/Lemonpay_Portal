@@ -4,8 +4,8 @@ import Project from "@/models/Project";
 import Epic from "@/models/Epic";
 import mongoose from "mongoose";
 
-// Define params type
-type Params = Promise<{ id: string }>;
+// Define params type - use projectId instead of id
+type Params = Promise<{ projectId: string }>;
 
 // GET: Fetch project metrics
 export async function GET(
@@ -14,20 +14,20 @@ export async function GET(
 ) {
   try {
     await connectDB();
-    const { id } = await params; // Await params here
+    const { projectId } = await params; // Changed from id to projectId
 
-    if (!mongoose.Types.ObjectId.isValid(id)) {
+    if (!mongoose.Types.ObjectId.isValid(projectId)) {
       return NextResponse.json({ error: "Invalid Project ID" }, { status: 400 });
     }
 
     // Get project
-    const project = await Project.findById(id);
+    const project = await Project.findById(projectId); // Changed from id to projectId
     if (!project) {
       return NextResponse.json({ error: "Project not found" }, { status: 404 });
     }
 
     // Get epic metrics
-    const epics = await Epic.find({ projectId: id });
+    const epics = await Epic.find({ projectId: projectId }); // Changed from id to projectId
     
     const totalEpics = epics.length;
     const completedEpics = epics.filter(epic => epic.status === "Done").length;
@@ -56,7 +56,7 @@ export async function GET(
     };
 
     const metrics = {
-      projectId: id,
+      projectId: projectId, // Changed from id to projectId
       projectName: project.name,
       projectKey: project.key,
       

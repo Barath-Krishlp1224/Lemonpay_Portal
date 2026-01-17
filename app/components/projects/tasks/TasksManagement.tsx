@@ -8,26 +8,19 @@ import {
   AlertCircle, CheckCircle, Clock as ClockIcon, BookOpen,
   GitBranch, MessageSquare, Paperclip, Eye, EyeOff,
   ChevronDown, ChevronUp, MoreVertical, ExternalLink,
-  User, AlertTriangle, Bug, ClipboardCheck, Bookmark
+  User, AlertTriangle, Bug, ClipboardCheck, Bookmark,
+  Archive
 } from "lucide-react";
-import type { Employee, SavedProject, Task as TaskType } from "@/app/types/project";
+import type { Employee, SavedProject, Task as TaskType, Epic } from "@/app/types/project";
 
-interface Epic {
+interface Subtask {
   _id: string;
-  epicId: string;
-  name: string;
-  summary: string;
-  description: string;
-  status: "Todo" | "In Progress" | "Review" | "Done";
-  priority: "Low" | "Medium" | "High" | "Critical";
-  startDate: string;
-  endDate: string;
-  ownerId: string;
-  assigneeIds: string[];
-  labels: string[];
-  projectId: string;
-  projectName: string;
-  createdBy: string;
+  title: string;
+  assigneeId: string;
+  assigneeName: string;
+  status: "Todo" | "In Progress" | "Done";
+  progressPercentage: number;
+  taskId: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -39,7 +32,7 @@ interface Task {
   summary: string;
   description: string;
   issueType: "Story" | "Task" | "Bug";
-  status: "Todo" | "In Progress" | "Review" | "Done" | "Blocked";
+  status: "Backlog" | "Todo" | "In Progress" | "Review" | "Done" | "Blocked";
   priority: "Lowest" | "Low" | "Medium" | "High" | "Highest";
   assigneeIds: string[];
   reporterIds: string[];
@@ -53,6 +46,7 @@ interface Task {
   duration: number;
   attachments: string[];
   comments: Comment[];
+  subtasks?: Subtask[];
   projectId: string;
   projectName: string;
   createdBy: string;
@@ -100,7 +94,7 @@ export default function TasksManagement({
     summary: "",
     description: "",
     issueType: "Story" as "Story" | "Task" | "Bug",
-    status: "Todo" as "Todo" | "In Progress" | "Review" | "Done" | "Blocked",
+    status: "Backlog" as "Backlog" | "Todo" | "In Progress" | "Review" | "Done" | "Blocked",
     priority: "Medium" as "Lowest" | "Low" | "Medium" | "High" | "Highest",
     assigneeIds: [] as string[],
     reporterIds: [] as string[],
@@ -114,6 +108,10 @@ export default function TasksManagement({
   // --- Comment State ---
   const [newComment, setNewComment] = useState<Record<string, string>>({});
   const [showComments, setShowComments] = useState<Record<string, boolean>>({});
+
+  // --- View Mode State ---
+  const [viewTaskId, setViewTaskId] = useState<string | null>(null);
+  const [isViewMode, setIsViewMode] = useState(false);
 
   const fetchTasks = async (epicId: string) => {
     if (!epicId) return;
@@ -185,7 +183,6 @@ export default function TasksManagement({
 
     setLoading(true);
     try {
-      // Get selected employees' names
       const selectedAssignees = employees.filter(emp => 
         taskFormData.assigneeIds.includes(emp._id)
       );
@@ -199,7 +196,6 @@ export default function TasksManagement({
       let url, method, response, data;
       
       if (editingTaskId) {
-        // For updating, use tasks/[id] endpoint
         url = `/api/tasks/${editingTaskId}`;
         method = "PUT";
         
@@ -219,7 +215,6 @@ export default function TasksManagement({
         
         data = await response.json();
       } else {
-        // For creating, try multiple endpoints
         const taskPayload = {
           ...taskFormData,
           assigneeNames: assigneeNames,
@@ -232,7 +227,6 @@ export default function TasksManagement({
           createdBy: employees.length > 0 ? employees[0]._id : "",
         };
         
-        // Try /api/tasks first
         try {
           response = await fetch('/api/tasks', {
             method: 'POST',
@@ -257,12 +251,12 @@ export default function TasksManagement({
       if (response.ok) {
         setMessage(editingTaskId ? "✅ Task updated successfully!" : "✅ Task created successfully!");
         
-        // Reset form
+        // Reset form with Backlog as default status
         setTaskFormData({
           summary: "",
           description: "",
           issueType: "Story",
-          status: "Todo",
+          status: "Backlog",
           priority: "Medium",
           assigneeIds: [],
           reporterIds: employees.length > 0 ? [employees[0]._id] : [],
@@ -273,7 +267,6 @@ export default function TasksManagement({
           duration: 7,
         });
         
-        // Refresh tasks list
         await fetchTasks(selectedEpic._id);
         setShowTaskForm(false);
         setEditingTaskId(null);
@@ -294,7 +287,7 @@ export default function TasksManagement({
       summary: task.summary || "",
       description: task.description || "",
       issueType: task.issueType || "Story",
-      status: task.status || "Todo",
+      status: task.status || "Backlog",
       priority: task.priority || "Medium",
       assigneeIds: task.assigneeIds || [],
       reporterIds: task.reporterIds || [],
@@ -431,6 +424,11 @@ export default function TasksManagement({
     });
   };
 
+  const handleViewTask = (task: Task) => {
+    setViewTaskId(task._id);
+    setIsViewMode(true);
+  };
+
   const filteredTasks = useMemo(() => {
     const tasksArray = Array.isArray(tasks) ? tasks : [];
     
@@ -470,8 +468,18 @@ export default function TasksManagement({
       case "Done": return "bg-green-100 text-green-800 border border-green-200";
       case "In Progress": return "bg-blue-100 text-blue-800 border border-blue-200";
       case "Review": return "bg-purple-100 text-purple-800 border border-purple-200";
-      case "Todo": return "bg-gray-100 text-gray-800 border border-gray-200";
+      case "Todo": return "bg-yellow-100 text-yellow-800 border border-yellow-200";
+      case "Backlog": return "bg-gray-100 text-gray-800 border border-gray-200";
       case "Blocked": return "bg-red-100 text-red-800 border border-red-200";
+      default: return "bg-gray-100 text-gray-800 border border-gray-200";
+    }
+  };
+
+  const getSubtaskStatusColor = (status: string) => {
+    switch(status) {
+      case "Done": return "bg-green-100 text-green-800 border border-green-200";
+      case "In Progress": return "bg-blue-100 text-blue-800 border border-blue-200";
+      case "Todo": return "bg-yellow-100 text-yellow-800 border border-yellow-200";
       default: return "bg-gray-100 text-gray-800 border border-gray-200";
     }
   };
@@ -500,8 +508,18 @@ export default function TasksManagement({
       case "In Progress": return <ClockIcon size={10} />;
       case "Review": return <Eye size={10} />;
       case "Todo": return <Bookmark size={10} />;
+      case "Backlog": return <Archive size={10} />;
       case "Blocked": return <AlertTriangle size={10} />;
       default: return <Bookmark size={10} />;
+    }
+  };
+
+  const getSubtaskStatusIcon = (status: string) => {
+    switch(status) {
+      case "Done": return <CheckCircle size={12} />;
+      case "In Progress": return <ClockIcon size={12} />;
+      case "Todo": return <Bookmark size={12} />;
+      default: return <Bookmark size={12} />;
     }
   };
 
@@ -556,7 +574,6 @@ export default function TasksManagement({
     return employees.filter(emp => task.reporterIds?.includes(emp._id));
   };
 
-  // Helper function to display assignee names from stored data or fallback to employees
   const getTaskAssigneeDisplay = (task: Task) => {
     if (task.assigneeNames && task.assigneeNames.length > 0) {
       return task.assigneeNames;
@@ -564,12 +581,35 @@ export default function TasksManagement({
     return getTaskAssignees(task).map(emp => emp.name);
   };
 
-  // Helper function to display reporter names from stored data or fallback to employees
   const getTaskReporterDisplay = (task: Task) => {
     if (task.reporterNames && task.reporterNames.length > 0) {
       return task.reporterNames;
     }
     return getTaskReporters(task).map(emp => emp.name);
+  };
+
+  const getViewTask = () => {
+    return tasks.find(task => task._id === viewTaskId);
+  };
+
+  // Calculate subtask progress statistics
+  const calculateSubtaskProgress = (subtasks: Subtask[] = []) => {
+    if (subtasks.length === 0) {
+      return { total: 0, done: 0, inProgress: 0, todo: 0, overallProgress: 0 };
+    }
+    
+    const done = subtasks.filter(s => s.status === "Done").length;
+    const inProgress = subtasks.filter(s => s.status === "In Progress").length;
+    const todo = subtasks.filter(s => s.status === "Todo").length;
+    const overallProgress = Math.round((done / subtasks.length) * 100);
+    
+    return {
+      total: subtasks.length,
+      done,
+      inProgress,
+      todo,
+      overallProgress
+    };
   };
 
   if (!selectedProject) {
@@ -608,6 +648,8 @@ export default function TasksManagement({
     return `${projectKey}-${taskNumber.toString().padStart(3, '0')}`;
   };
 
+  const viewTask = getViewTask();
+
   return (
     <div className="flex flex-col h-full">
       <div className="bg-white rounded-3xl border-2 border-slate-200 shadow-xl p-6 flex-1 flex flex-col">
@@ -640,7 +682,7 @@ export default function TasksManagement({
                   summary: "",
                   description: "",
                   issueType: "Story",
-                  status: "Todo",
+                  status: "Backlog",
                   priority: "Medium",
                   assigneeIds: [],
                   reporterIds: employees.length > 0 ? [employees[0]._id] : [],
@@ -681,6 +723,7 @@ export default function TasksManagement({
                     className="pl-10 pr-4 py-2 w-full bg-slate-50 border-2 border-slate-100 rounded-xl text-xs font-bold outline-none focus:border-[#3fa87d] focus:bg-white transition-all appearance-none"
                   >
                     <option value="">All Status</option>
+                    <option value="Backlog">Backlog</option>
                     <option value="Todo">Todo</option>
                     <option value="In Progress">In Progress</option>
                     <option value="Review">Review</option>
@@ -764,10 +807,14 @@ export default function TasksManagement({
                     
                     const assigneeNames = getTaskAssigneeDisplay(task);
                     const reporterNames = getTaskReporterDisplay(task);
-                    const isExpanded = expandedTaskId === task._id;
+                    const subtaskProgress = calculateSubtaskProgress(task.subtasks);
                     
                     return (
-                      <div key={task._id} className="border-2 border-slate-200 rounded-2xl hover:border-[#3fa87d]/50 transition-colors bg-white">
+                      <div 
+                        key={task._id} 
+                        className="border-2 border-slate-200 rounded-2xl hover:border-[#3fa87d]/50 transition-colors bg-white cursor-pointer hover:shadow-md"
+                        onClick={() => handleViewTask(task)}
+                      >
                         {/* Task Header */}
                         <div className="p-4">
                           <div className="flex items-start justify-between mb-3">
@@ -787,34 +834,25 @@ export default function TasksManagement({
                             </div>
                             <div className="flex items-center gap-2">
                               <button
-                                onClick={() => toggleTaskExpand(task._id)}
-                                className="p-1 hover:bg-slate-100 rounded-lg transition-colors"
-                                title={isExpanded ? "Collapse" : "Expand"}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleEditTask(task);
+                                }}
+                                className="p-1 hover:bg-blue-100 text-blue-600 rounded-lg transition-colors"
+                                title="Edit Task"
                               >
-                                {isExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                                <Edit2 size={14} />
                               </button>
-                              <div className="flex items-center gap-1">
-                                <button
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    handleEditTask(task);
-                                  }}
-                                  className="p-1 hover:bg-blue-100 text-blue-600 rounded-lg transition-colors"
-                                  title="Edit Task"
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleDeleteTask(task._id);
+                                }}
+                                className="p-1 hover:bg-red-100 text-red-600 rounded-lg transition-colors"
+                                title="Delete Task"
                                 >
-                                  <Edit2 size={14} />
-                                </button>
-                                <button
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    handleDeleteTask(task._id);
-                                  }}
-                                  className="p-1 hover:bg-red-100 text-red-600 rounded-lg transition-colors"
-                                  title="Delete Task"
-                                >
-                                  <Trash2 size={14} />
-                                </button>
-                              </div>
+                                <Trash2 size={14} />
+                              </button>
                             </div>
                           </div>
                           
@@ -837,6 +875,28 @@ export default function TasksManagement({
                               </div>
                             )}
                           </div>
+
+                          {/* Subtasks Progress Bar (if any) */}
+                          {task.subtasks && task.subtasks.length > 0 && (
+                            <div className="mb-3">
+                              <div className="flex items-center justify-between mb-1">
+                                <span className="text-xs font-bold text-slate-700">Subtasks Progress</span>
+                                <span className="text-xs font-bold text-slate-700">{subtaskProgress.overallProgress}%</span>
+                              </div>
+                              <div className="w-full bg-slate-200 rounded-full h-2">
+                                <div 
+                                  className="bg-[#3fa87d] h-2 rounded-full transition-all duration-300"
+                                  style={{ width: `${subtaskProgress.overallProgress}%` }}
+                                />
+                              </div>
+                              <div className="flex justify-between text-[10px] text-slate-500 mt-1">
+                                <span>Total: {subtaskProgress.total}</span>
+                                <span>Done: {subtaskProgress.done}</span>
+                                <span>In Progress: {subtaskProgress.inProgress}</span>
+                                <span>Todo: {subtaskProgress.todo}</span>
+                              </div>
+                            </div>
+                          )}
 
                           {/* Assignees and Reporters */}
                           <div className="flex items-start gap-6 text-xs text-slate-600 mb-3">
@@ -897,146 +957,14 @@ export default function TasksManagement({
                                 </div>
                               )}
                             </div>
-                            <button
-                              onClick={() => toggleComments(task._id)}
-                              className="flex items-center gap-1 text-[#3fa87d] hover:text-[#35946d]"
-                            >
-                              <MessageSquare size={12} />
-                              <span className="text-xs font-bold">
+                            <div className="flex items-center gap-1">
+                              <MessageSquare size={12} className="text-slate-400" />
+                              <span className="text-xs text-slate-500">
                                 {task.comments?.length || 0} comments
                               </span>
-                            </button>
+                            </div>
                           </div>
                         </div>
-
-                        {/* Expanded Content */}
-                        {isExpanded && (
-                          <div className="p-4 border-t border-slate-100 bg-slate-50/50">
-                            {/* Description */}
-                            {task.description && (
-                              <div className="mb-4">
-                                <h5 className="text-xs font-bold text-slate-700 mb-2 flex items-center gap-1">
-                                  <FileText size={12} />
-                                  Description
-                                </h5>
-                                <p className="text-sm text-slate-600 bg-white p-3 rounded-lg border border-slate-200">
-                                  {task.description}
-                                </p>
-                              </div>
-                            )}
-
-                            {/* Auto-generated Fields */}
-                            <div className="grid grid-cols-2 gap-4 mb-4">
-                              <div>
-                                <h5 className="text-xs font-bold text-slate-700 mb-2 flex items-center gap-1">
-                                  <Hash size={12} />
-                                  Issue Details
-                                </h5>
-                                <div className="space-y-2 bg-white p-3 rounded-lg border border-slate-200">
-                                  <div className="flex justify-between">
-                                    <span className="text-xs text-slate-500">Task ID:</span>
-                                    <span className="text-xs font-mono font-bold">{task.taskId || "N/A"}</span>
-                                  </div>
-                                  <div className="flex justify-between">
-                                    <span className="text-xs text-slate-500">Created By:</span>
-                                    <span className="text-xs font-bold">{task.createdBy || "N/A"}</span>
-                                  </div>
-                                  <div className="flex justify-between">
-                                    <span className="text-xs text-slate-500">Last Updated:</span>
-                                    <span className="text-xs font-bold">{formatDate(task.updatedAt)}</span>
-                                  </div>
-                                  <div className="flex justify-between">
-                                    <span className="text-xs text-slate-500">Created Date:</span>
-                                    <span className="text-xs font-bold">{formatDate(task.createdAt)}</span>
-                                  </div>
-                                </div>
-                              </div>
-                              <div>
-                                <h5 className="text-xs font-bold text-slate-700 mb-2 flex items-center gap-1">
-                                  <Target size={12} />
-                                  Epic Link
-                                </h5>
-                                <div className="flex items-center gap-2 p-3 bg-white rounded-lg border border-slate-200">
-                                  <Target size={14} className="text-[#3fa87d]" />
-                                  <div>
-                                    <div className="text-xs font-bold">{selectedEpic.name}</div>
-                                    <div className="text-[10px] text-slate-500">{selectedEpic.epicId}</div>
-                                  </div>
-                                </div>
-                              </div>
-                            </div>
-
-                            {/* Comments Section */}
-                            <div>
-                              <div className="flex items-center justify-between mb-3">
-                                <h5 className="text-xs font-bold text-slate-700 flex items-center gap-1">
-                                  <MessageSquare size={12} />
-                                  Comments ({task.comments?.length || 0})
-                                </h5>
-                                <button
-                                  onClick={() => toggleComments(task._id)}
-                                  className="text-xs text-[#3fa87d] hover:text-[#35946d] font-bold"
-                                >
-                                  {showComments[task._id] ? "Hide" : "Show"} comments
-                                </button>
-                              </div>
-                              
-                              {/* Comments List */}
-                              {showComments[task._id] && (
-                                <>
-                                  {task.comments && task.comments.length > 0 ? (
-                                    <div className="space-y-3 mb-4 max-h-48 overflow-y-auto pr-2">
-                                      {task.comments.map((comment) => {
-                                        const commentUser = employees.find(e => e._id === comment.userId);
-                                        return (
-                                          <div key={comment._id} className="p-3 bg-white rounded-lg border border-slate-200">
-                                            <div className="flex items-center justify-between mb-2">
-                                              <div className="flex items-center gap-2">
-                                                <div className="w-6 h-6 bg-slate-300 rounded-full flex items-center justify-center text-[10px] font-bold">
-                                                  {commentUser?.name.charAt(0) || "U"}
-                                                </div>
-                                                <div>
-                                                  <span className="text-xs font-bold">{comment.userName}</span>
-                                                  <span className="text-[10px] text-slate-500 ml-2">
-                                                    {formatDate(comment.createdAt)}
-                                                  </span>
-                                                </div>
-                                              </div>
-                                            </div>
-                                            <p className="text-sm text-slate-700">{comment.content}</p>
-                                          </div>
-                                        );
-                                      })}
-                                    </div>
-                                  ) : (
-                                    <div className="mb-4 p-3 bg-white rounded-lg border border-slate-200 text-center">
-                                      <p className="text-sm text-slate-500">No comments yet</p>
-                                    </div>
-                                  )}
-                                  
-                                  {/* Add Comment */}
-                                  <div className="flex gap-2">
-                                    <input
-                                      type="text"
-                                      value={newComment[task._id] || ""}
-                                      onChange={(e) => setNewComment(prev => ({ ...prev, [task._id]: e.target.value }))}
-                                      onKeyPress={(e) => e.key === 'Enter' && handleAddComment(task._id)}
-                                      placeholder="Add a comment..."
-                                      className="flex-1 px-3 py-2 bg-white border-2 border-slate-200 rounded-xl text-sm outline-none focus:border-[#3fa87d] transition-all"
-                                    />
-                                    <button
-                                      onClick={() => handleAddComment(task._id)}
-                                      disabled={!newComment[task._id]?.trim()}
-                                      className="px-4 py-2 bg-slate-800 text-white text-xs font-bold rounded-xl hover:bg-[#3fa87d] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                                    >
-                                      Add
-                                    </button>
-                                  </div>
-                                </>
-                              )}
-                            </div>
-                          </div>
-                        )}
                       </div>
                     );
                   })
@@ -1150,6 +1078,7 @@ export default function TasksManagement({
                           onChange={(e) => setTaskFormData({...taskFormData, status: e.target.value as any})}
                           className="w-full px-3 py-2 bg-slate-50 border-2 border-slate-200 rounded-xl text-sm font-bold outline-none focus:border-[#3fa87d] transition-all appearance-none"
                         >
+                          <option value="Backlog">Backlog</option>
                           <option value="Todo">Todo</option>
                           <option value="In Progress">In Progress</option>
                           <option value="Review">Review</option>
@@ -1379,6 +1308,358 @@ export default function TasksManagement({
                     </button>
                   </div>
                 </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* View Task Modal */}
+        {isViewMode && viewTask && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={() => setIsViewMode(false)}>
+            <div 
+              className="bg-white rounded-3xl border-2 border-slate-200 shadow-2xl w-full max-w-4xl max-h-[80vh] flex flex-col"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {/* Modal Header */}
+              <div className="p-6 border-b border-slate-100 flex items-center justify-between sticky top-0 bg-white z-10 rounded-t-3xl">
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={() => {
+                      setIsViewMode(false);
+                      setViewTaskId(null);
+                    }}
+                    className="p-2 hover:bg-slate-100 rounded-xl transition-colors"
+                    title="Close"
+                  >
+                    <X size={18} className="text-slate-500" />
+                  </button>
+                  <h2 className="text-xl font-bold text-slate-800">Task Details</h2>
+                  <div className="flex items-center gap-2">
+                    <div className={`px-3 py-1 rounded-lg text-xs font-black flex items-center gap-1 ${getIssueTypeColor(viewTask.issueType)}`}>
+                      {getIssueTypeIcon(viewTask.issueType)}
+                      <span>{viewTask.issueType}</span>
+                    </div>
+                    <div className={`px-3 py-1 rounded-lg text-xs font-black flex items-center gap-1 ${getStatusColor(viewTask.status)}`}>
+                      {getStatusIcon(viewTask.status)}
+                      <span>{viewTask.status}</span>
+                    </div>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <div className="px-3 py-1 bg-slate-100 text-slate-600 text-xs font-bold rounded-full">
+                    {viewTask.issueKey || "No ID"}
+                  </div>
+                </div>
+              </div>
+
+              {/* Modal Content - Scrollable */}
+              <div className="flex-1 overflow-y-auto p-6">
+                <div className="space-y-6">
+                  {/* Task Summary */}
+                  <div className="space-y-2">
+                    <h3 className="text-2xl font-bold text-slate-800">{viewTask.summary || "No title"}</h3>
+                    <div className="flex items-center gap-4 text-sm text-slate-500">
+                      <div className="flex items-center gap-1">
+                        <Calendar size={14} />
+                        Created: {formatDate(viewTask.createdAt)}
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <Calendar size={14} />
+                        Updated: {formatDate(viewTask.updatedAt)}
+                      </div>
+                      {viewTask.dueDate && (
+                        <div className="flex items-center gap-1">
+                          <Clock size={14} />
+                          Due: {formatDate(viewTask.dueDate)}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Priority and Duration */}
+                  <div className="grid grid-cols-3 gap-4">
+                    <div className="space-y-2">
+                      <label className="text-xs font-bold text-slate-500 uppercase">Priority</label>
+                      <div className={`px-4 py-3 rounded-xl text-sm font-bold flex items-center gap-2 ${getPriorityColor(viewTask.priority)}`}>
+                        {getPriorityIcon(viewTask.priority)}
+                        <span>{viewTask.priority}</span>
+                      </div>
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-xs font-bold text-slate-500 uppercase">Story Points</label>
+                      <div className="px-4 py-3 bg-slate-100 text-slate-800 rounded-xl text-sm font-bold">
+                        {viewTask.storyPoints || 0} SP
+                      </div>
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-xs font-bold text-slate-500 uppercase">Duration</label>
+                      <div className="px-4 py-3 bg-slate-100 text-slate-800 rounded-xl text-sm font-bold flex items-center gap-2">
+                        <CalendarDays size={16} className="text-slate-500" />
+                        {viewTask.duration || 0} days
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Subtasks Section */}
+                  {viewTask.subtasks && viewTask.subtasks.length > 0 && (
+                    <div className="space-y-4">
+                      <h4 className="text-sm font-bold text-slate-700 flex items-center gap-2">
+                        <ClipboardCheck size={16} />
+                        Subtasks ({viewTask.subtasks.length})
+                      </h4>
+                      
+                      {/* Overall Progress Bar */}
+                      <div className="p-4 bg-slate-50 rounded-xl border border-slate-200">
+                        <div className="flex items-center justify-between mb-3">
+                          <div>
+                            <div className="font-bold text-slate-800">Overall Progress</div>
+                            <div className="text-xs text-slate-600">
+                              {calculateSubtaskProgress(viewTask.subtasks).done} of {viewTask.subtasks.length} completed
+                            </div>
+                          </div>
+                          <div className="text-lg font-bold text-slate-800">
+                            {calculateSubtaskProgress(viewTask.subtasks).overallProgress}%
+                          </div>
+                        </div>
+                        <div className="w-full bg-slate-200 rounded-full h-3 mb-2">
+                          <div 
+                            className="bg-[#3fa87d] h-3 rounded-full transition-all duration-300"
+                            style={{ width: `${calculateSubtaskProgress(viewTask.subtasks).overallProgress}%` }}
+                          />
+                        </div>
+                        <div className="flex justify-between text-xs text-slate-600">
+                          <div className="flex items-center gap-1">
+                            <div className="w-3 h-3 bg-green-500 rounded-full"></div>
+                            <span>Done: {calculateSubtaskProgress(viewTask.subtasks).done}</span>
+                          </div>
+                          <div className="flex items-center gap-1">
+                            <div className="w-3 h-3 bg-blue-500 rounded-full"></div>
+                            <span>In Progress: {calculateSubtaskProgress(viewTask.subtasks).inProgress}</span>
+                          </div>
+                          <div className="flex items-center gap-1">
+                            <div className="w-3 h-3 bg-yellow-500 rounded-full"></div>
+                            <span>Todo: {calculateSubtaskProgress(viewTask.subtasks).todo}</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Subtasks List */}
+                      <div className="space-y-3">
+                        {viewTask.subtasks.map((subtask) => (
+                          <div key={subtask._id} className="p-4 bg-white rounded-xl border border-slate-200">
+                            <div className="flex items-start justify-between mb-3">
+                              <div className="flex-1">
+                                <div className="font-bold text-slate-800 mb-1">{subtask.title}</div>
+                                <div className="flex items-center gap-3">
+                                  <div className="flex items-center gap-1">
+                                    <User size={12} className="text-slate-400" />
+                                    <span className="text-xs text-slate-600">{subtask.assigneeName}</span>
+                                  </div>
+                                  <div className={`px-2 py-1 rounded-lg text-[10px] font-black flex items-center gap-1 ${getSubtaskStatusColor(subtask.status)}`}>
+                                    {getSubtaskStatusIcon(subtask.status)}
+                                    <span>{subtask.status}</span>
+                                  </div>
+                                </div>
+                              </div>
+                              <div className="text-right">
+                                <div className="text-sm font-bold text-slate-800">{subtask.progressPercentage}%</div>
+                                <div className="text-xs text-slate-500">Progress</div>
+                              </div>
+                            </div>
+                            
+                            {/* Individual Subtask Progress Bar */}
+                            <div className="w-full bg-slate-200 rounded-full h-2 mb-2">
+                              <div 
+                                className={`h-2 rounded-full transition-all duration-300 ${
+                                  subtask.status === 'Done' ? 'bg-green-500' :
+                                  subtask.status === 'In Progress' ? 'bg-blue-500' :
+                                  'bg-yellow-500'
+                                }`}
+                                style={{ width: `${subtask.progressPercentage}%` }}
+                              />
+                            </div>
+                            
+                            <div className="flex justify-between text-[10px] text-slate-500">
+                              <span>Created: {formatDate(subtask.createdAt)}</span>
+                              <span>Updated: {formatDate(subtask.updatedAt)}</span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Description */}
+                  {viewTask.description && (
+                    <div className="space-y-3">
+                      <h4 className="text-sm font-bold text-slate-700 flex items-center gap-2">
+                        <FileText size={16} />
+                        Description
+                      </h4>
+                      <div className="p-4 bg-slate-50 rounded-xl border border-slate-200">
+                        <p className="text-slate-700 whitespace-pre-wrap">{viewTask.description}</p>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Assignees and Reporters */}
+                  <div className="grid grid-cols-2 gap-6">
+                    <div className="space-y-3">
+                      <h4 className="text-sm font-bold text-slate-700 flex items-center gap-2">
+                        <Users size={16} />
+                        Assignees
+                      </h4>
+                      {getTaskAssigneeDisplay(viewTask).length > 0 ? (
+                        <div className="space-y-2">
+                          {getTaskAssigneeDisplay(viewTask).map((name, index) => (
+                            <div key={index} className="flex items-center gap-3 p-3 bg-white rounded-xl border border-slate-200">
+                              <div className="w-8 h-8 bg-slate-300 rounded-full flex items-center justify-center text-sm font-bold">
+                                {name.charAt(0)}
+                              </div>
+                              <span className="font-bold">{name}</span>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 text-center">
+                          <p className="text-slate-500">No assignees</p>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="space-y-3">
+                      <h4 className="text-sm font-bold text-slate-700 flex items-center gap-2">
+                        <User size={16} />
+                        Reporters
+                      </h4>
+                      {getTaskReporterDisplay(viewTask).length > 0 ? (
+                        <div className="space-y-2">
+                          {getTaskReporterDisplay(viewTask).map((name, index) => (
+                            <div key={index} className="flex items-center gap-3 p-3 bg-white rounded-xl border border-slate-200">
+                              <div className="w-8 h-8 bg-slate-300 rounded-full flex items-center justify-center text-sm font-bold">
+                                {name.charAt(0)}
+                              </div>
+                              <span className="font-bold">{name}</span>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 text-center">
+                          <p className="text-slate-500">No reporters</p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Labels */}
+                  {viewTask.labels && viewTask.labels.length > 0 && (
+                    <div className="space-y-3">
+                      <h4 className="text-sm font-bold text-slate-700 flex items-center gap-2">
+                        <Tag size={16} />
+                        Labels
+                      </h4>
+                      <div className="flex flex-wrap gap-2">
+                        {viewTask.labels.map((label, index) => (
+                          <div key={index} className="px-3 py-1.5 bg-slate-100 text-slate-700 text-xs font-bold rounded-full border border-slate-300 flex items-center gap-1">
+                            <Tag size={12} />
+                            {label}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Epic Link */}
+                  <div className="space-y-3">
+                    <h4 className="text-sm font-bold text-slate-700 flex items-center gap-2">
+                      <Target size={16} />
+                      Epic
+                    </h4>
+                    <div className="p-4 bg-[#3fa87d]/10 rounded-xl border border-[#3fa87d]/20">
+                      <div className="flex items-center gap-3">
+                        <Target size={20} className="text-[#3fa87d]" />
+                        <div>
+                          <div className="font-bold text-slate-800">{selectedEpic.name}</div>
+                          <div className="text-sm text-slate-600">{selectedEpic.epicId}</div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Project Info */}
+                  <div className="space-y-3">
+                    <h4 className="text-sm font-bold text-slate-700 flex items-center gap-2">
+                      <FileText size={16} />
+                      Project
+                    </h4>
+                    <div className="p-4 bg-slate-50 rounded-xl border border-slate-200">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <div className="font-bold text-slate-800">{selectedProject.name}</div>
+                          <div className="text-sm text-slate-600">{selectedProject.key}</div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Comments Section */}
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between">
+                      <h4 className="text-sm font-bold text-slate-700 flex items-center gap-2">
+                        <MessageSquare size={16} />
+                        Comments ({viewTask.comments?.length || 0})
+                      </h4>
+                    </div>
+
+                    {/* Comments List */}
+                    {viewTask.comments && viewTask.comments.length > 0 ? (
+                      <div className="space-y-3 max-h-64 overflow-y-auto pr-2">
+                        {viewTask.comments.map((comment) => {
+                          const commentUser = employees.find(e => e._id === comment.userId);
+                          return (
+                            <div key={comment._id} className="p-4 bg-white rounded-xl border border-slate-200">
+                              <div className="flex items-center justify-between mb-3">
+                                <div className="flex items-center gap-3">
+                                  <div className="w-8 h-8 bg-slate-300 rounded-full flex items-center justify-center text-sm font-bold">
+                                    {commentUser?.name.charAt(0) || "U"}
+                                  </div>
+                                  <div>
+                                    <div className="font-bold">{comment.userName}</div>
+                                    <div className="text-xs text-slate-500">
+                                      {formatDate(comment.createdAt)}
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+                              <p className="text-slate-700">{comment.content}</p>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <div className="p-6 bg-slate-50 rounded-xl border border-slate-200 text-center">
+                        <MessageSquare size={24} className="mx-auto text-slate-300 mb-2" />
+                        <p className="text-slate-500">No comments yet</p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* Modal Footer */}
+              <div className="p-6 border-t border-slate-100 flex items-center justify-between">
+                <div className="text-xs text-slate-500">
+                  Created by: {viewTask.createdBy || "Unknown"}
+                </div>
+                <button
+                  onClick={() => {
+                    setIsViewMode(false);
+                    setViewTaskId(null);
+                  }}
+                  className="px-6 py-2 bg-slate-800 text-white text-sm font-bold rounded-xl hover:bg-slate-900 transition-colors"
+                >
+                  Close
+                </button>
               </div>
             </div>
           </div>

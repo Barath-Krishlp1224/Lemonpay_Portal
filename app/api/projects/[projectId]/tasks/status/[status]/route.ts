@@ -2,9 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import connectDB from '@/lib/mongodb';
 import Task from '@/models/Task';
 
-// 1. Params must match folder names: [id] and [status]
-// 2. Must be a Promise for Next.js 15
-type RouteParams = Promise<{ id: string; status: string }>;
+// Params must match folder names: [projectId] and [status]
+type RouteParams = Promise<{ projectId: string; status: string }>;
 
 export async function GET(
   request: NextRequest,
@@ -13,11 +12,11 @@ export async function GET(
   try {
     await connectDB();
     
-    // 3. Await the params
-    const { id, status } = await params;
+    // Await the params
+    const { projectId, status } = await params; // Changed from id to projectId
     
     const tasks = await Task.find({
-      projectId: id, // Use 'id' from the URL to query your 'projectId' field
+      projectId: projectId, // Use 'projectId' from the URL to query your 'projectId' field
       status: status
     }).sort({ dueDate: 1, priority: -1 });
 
