@@ -48,12 +48,10 @@ interface TaskWithSubtasks {
   updatedAt: string;
 }
 
-interface ProjectViewProps {
-  employees: Employee[];
-}
-
-export default function ProjectView({ employees }: ProjectViewProps) {
+// Page component doesn't need props interface for Next.js
+export default function ProjectViewPage() {
   const [loading, setLoading] = useState(true);
+  const [employees, setEmployees] = useState<Employee[]>([]);
   const [projects, setProjects] = useState<SavedProject[]>([]);
   const [epics, setEpics] = useState<Epic[]>([]);
   const [tasks, setTasks] = useState<TaskWithSubtasks[]>([]);
@@ -84,6 +82,13 @@ export default function ProjectView({ employees }: ProjectViewProps) {
   const fetchAllData = async () => {
     setLoading(true);
     try {
+      // Fetch employees first
+      const employeesRes = await fetch('/api/employees');
+      const employeesData = await employeesRes.json();
+      const employeesList = Array.isArray(employeesData) ? employeesData : 
+                          employeesData.data || employeesData.employees || [];
+      setEmployees(employeesList);
+
       // Fetch projects
       const projectsRes = await fetch('/api/projects');
       const projectsData = await projectsRes.json();
