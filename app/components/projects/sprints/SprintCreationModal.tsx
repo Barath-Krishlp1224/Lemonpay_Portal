@@ -15,7 +15,7 @@ interface SprintCreationModalProps {
   allProjects?: SavedProject[];
 }
 
-// Define interfaces based on your actual API response
+// Define interfaces
 interface BacklogTask {
   _id: string;
   summary?: string;
@@ -30,7 +30,7 @@ interface BacklogTask {
   priority?: string;
   issueType?: string;
   epicId?: string;
-  epicName?: string; // Add epicName field
+  epicName?: string;
   projectId?: string;
   sprintId?: string;
   taskId?: string;
@@ -39,6 +39,8 @@ interface BacklogTask {
   isCarriedOver?: boolean;
   previousSprintId?: string;
   usedInLastSprint?: boolean;
+  wasInSprint?: boolean; // New field to track if task was ever in a sprint
+  lastSprintStatus?: string; // Track what status it had in last sprint
 }
 
 interface BacklogEpic {
@@ -108,6 +110,7 @@ export default function SprintCreationModal({
   const [lastSprintTasks, setLastSprintTasks] = useState<BacklogTask[]>([]);
   const [showTaskDetails, setShowTaskDetails] = useState<boolean>(false);
   const [selectedProjectTasks, setSelectedProjectTasks] = useState<BacklogTask[]>([]);
+  const [recentlyMovedToBacklogTasks, setRecentlyMovedToBacklogTasks] = useState<BacklogTask[]>([]);
 
   // Reset form when modal opens/closes
   useEffect(() => {
@@ -124,6 +127,7 @@ export default function SprintCreationModal({
       setShowCarriedOverTasks(false);
       setLastSprintTasks([]);
       setShowTaskDetails(false);
+      setRecentlyMovedToBacklogTasks([]);
       
       const initialName = generateUniqueSprintName(project.key, existingSprints);
       setSprintName(initialName);
@@ -209,11 +213,10 @@ export default function SprintCreationModal({
         }
       });
       
-      // Filter for backlog tasks
+      // Filter for backlog tasks - include ALL tasks that are in Backlog status
       const filteredTasks = tasksData.filter((task: any) => {
-        const hasNoSprint = !task.sprintId || task.sprintId === null;
         const isBacklogStatus = task.status === "Backlog" || task.status === "Todo" || task.status === "To Do";
-        return hasNoSprint && isBacklogStatus;
+        return isBacklogStatus;
       });
       
       // Filter for not started epics
@@ -229,7 +232,8 @@ export default function SprintCreationModal({
           ...task,
           project: taskProject,
           projectName: taskProject?.name || "Unknown Project",
-          epicName: epicName // Add epic name to task
+          epicName: epicName,
+          wasInSprint: task.sprintId !== undefined && task.sprintId !== null // Track if was in sprint
         } as BacklogTask;
       });
       
@@ -248,11 +252,15 @@ export default function SprintCreationModal({
       let lastSprint: BacklogTask[] = [];
       
       if (previousSprints.length > 0) {
-        const recentSprint = previousSprints
+        // Get all completed sprints sorted by date
+        const completedSprints = previousSprints
           .filter(s => s.status === "Completed")
-          .sort((a, b) => new Date(b.endDate).getTime() - new Date(a.endDate).getTime())[0];
+          .sort((a, b) => new Date(b.endDate).getTime() - new Date(a.endDate).getTime());
         
-        if (recentSprint) {
+        // Check the most recent sprint first
+        if (completedSprints.length > 0) {
+          const recentSprint = completedSprints[0];
+          
           try {
             const sprintTasksRes = await fetch(`/api/sprints/${recentSprint._id}/tasks`);
             if (sprintTasksRes.ok) {
@@ -273,7 +281,8 @@ export default function SprintCreationModal({
                   project: taskProject,
                   projectName: taskProject?.name || "Unknown Project",
                   epicName: epicName,
-                  usedInLastSprint: true
+                  usedInLastSprint: true,
+                  lastSprintStatus: task.status // Save the status from last sprint
                 } as BacklogTask;
               });
               
@@ -287,12 +296,61 @@ export default function SprintCreationModal({
                   epicName: epicName,
                   isCarriedOver: true,
                   previousSprintId: recentSprint._id,
-                  usedInLastSprint: true
+                  usedInLastSprint: true,
+                  lastSprintStatus: task.status
                 } as BacklogTask;
               });
             }
           } catch (err) {
             console.log("Failed to fetch carried-over tasks:", err);
+          }
+        }
+        
+        // Also check other sprints for tasks that might have been moved to backlog
+        // This ensures we capture tasks that were moved from any status to backlog
+        for (const completedSprint of completedSprints.slice(0, 3)) { // Check last 3 sprints
+          try {
+            const sprintTasksRes = await fetch(`/api/sprints/${completedSprint._id}/tasks`);
+            if (sprintTasksRes.ok) {
+              const sprintTasksData = await sprintTasksRes.json();
+              const sprintTasks = sprintTasksData.data || sprintTasksData.tasks || [];
+              
+              // Find tasks that were in this sprint but are now in backlog
+              const tasksMovedToBacklog = sprintTasks
+                .filter((task: any) => {
+                  // Check if this task is now in our filteredTasks (backlog)
+                  return filteredTasks.some(backlogTask => backlogTask._id === task._id);
+                })
+                .map((task: any) => {
+                  const taskProject = allProjects.find(p => p._id === task.projectId);
+                  const epicName = task.epicId ? epicMap.get(task.epicId) : undefined;
+                  return {
+                    ...task,
+                    project: taskProject,
+                    projectName: taskProject?.name || "Unknown Project",
+                    epicName: epicName,
+                    usedInLastSprint: true,
+                    wasInSprint: true,
+                    lastSprintStatus: task.status
+                  } as BacklogTask;
+                });
+              
+              // Add to lastSprintTasks for tracking
+              lastSprint = [...lastSprint, ...sprintTasks.map((task: any) => {
+                const taskProject = allProjects.find(p => p._id === task.projectId);
+                const epicName = task.epicId ? epicMap.get(task.epicId) : undefined;
+                return {
+                  ...task,
+                  project: taskProject,
+                  projectName: taskProject?.name || "Unknown Project",
+                  epicName: epicName,
+                  usedInLastSprint: true,
+                  lastSprintStatus: task.status
+                } as BacklogTask;
+              })];
+            }
+          } catch (err) {
+            console.log(`Failed to fetch tasks from sprint ${completedSprint._id}:`, err);
           }
         }
       }
@@ -301,8 +359,14 @@ export default function SprintCreationModal({
       const lastSprintTaskIds = lastSprint.map(task => task._id);
       const markedTasks = enhancedTasks.map(task => ({
         ...task,
-        usedInLastSprint: lastSprintTaskIds.includes(task._id)
+        usedInLastSprint: lastSprintTaskIds.includes(task._id),
+        wasInSprint: task.wasInSprint || lastSprintTaskIds.includes(task._id)
       })) as BacklogTask[];
+      
+      // Separate tasks that were recently moved to backlog (were in sprint but now in backlog)
+      const recentlyMovedTasks = markedTasks.filter(task => 
+        task.wasInSprint && (task.status === "Backlog" || task.status === "Todo" || task.status === "To Do")
+      );
       
       // Mark epics that have tasks in last sprint
       const markedEpics = enhancedEpics.map(epic => {
@@ -319,6 +383,7 @@ export default function SprintCreationModal({
       setCarriedOverTasks(carriedOver);
       setBacklogEpics(markedEpics);
       setLastSprintTasks(lastSprint);
+      setRecentlyMovedToBacklogTasks(recentlyMovedTasks);
       
       // Filter tasks for current project
       const currentProjectTasks = markedTasks.filter(task => 
@@ -336,11 +401,19 @@ export default function SprintCreationModal({
       setAvailablePoints(regularPoints + carriedOverPoints);
       
       // Auto-select carried-over tasks by default
+      const autoSelectTaskIds: string[] = [];
       if (carriedOver.length > 0) {
         const carriedOverTaskIds = carriedOver.map(task => task._id);
-        setSelectedTasks(prev => [...new Set([...prev, ...carriedOverTaskIds])]);
+        autoSelectTaskIds.push(...carriedOverTaskIds);
         setShowCarriedOverTasks(true);
       }
+      
+      // Also auto-select tasks that were recently moved to backlog (optional)
+      // You can enable this if you want to auto-select all previously sprint tasks
+      // const recentlyMovedTaskIds = recentlyMovedTasks.map(task => task._id);
+      // autoSelectTaskIds.push(...recentlyMovedTaskIds);
+      
+      setSelectedTasks(prev => [...new Set([...prev, ...autoSelectTaskIds])]);
     } catch (err) {
       console.error("Failed to fetch backlog items:", err);
     } finally {
@@ -430,6 +503,9 @@ export default function SprintCreationModal({
         velocity: suggestedVelocity,
         carriedOverTasks: selectedTasks.filter(taskId => 
           carriedOverTasks.some(task => task._id === taskId && task.isCarriedOver)
+        ),
+        recentlyMovedTasks: selectedTasks.filter(taskId => 
+          recentlyMovedToBacklogTasks.some(task => task._id === taskId)
         )
       };
 
@@ -525,6 +601,27 @@ export default function SprintCreationModal({
     ));
   };
 
+  // Select all recently moved to backlog tasks
+  const handleSelectAllRecentlyMoved = () => {
+    const recentlyMovedTaskIds = recentlyMovedToBacklogTasks.map(task => task._id);
+    setSelectedTasks(prev => {
+      const newSelected = [...prev];
+      recentlyMovedTaskIds.forEach(id => {
+        if (!newSelected.includes(id)) {
+          newSelected.push(id);
+        }
+      });
+      return newSelected;
+    });
+  };
+
+  // Deselect all recently moved to backlog tasks
+  const handleDeselectAllRecentlyMoved = () => {
+    setSelectedTasks(prev => prev.filter(id => 
+      !recentlyMovedToBacklogTasks.some(task => task._id === id)
+    ));
+  };
+
   const calculateSelectedPoints = useMemo(() => {
     const regularTaskPoints = backlogTasks
       .filter(task => selectedTasks.includes(task._id) && !carriedOverTasks.some(ct => ct._id === task._id))
@@ -564,6 +661,27 @@ export default function SprintCreationModal({
       return `${taskName} (Epic: ${task.epicName})`;
     }
     return taskName;
+  };
+
+  // Get task status badge
+  const getTaskStatusBadge = (task: BacklogTask) => {
+    if (task.isCarriedOver) {
+      return (
+        <span className="px-2 py-0.5 bg-orange-100 text-orange-700 text-xs font-bold rounded">
+          Carried Over
+        </span>
+      );
+    }
+    
+    if (task.wasInSprint) {
+      return (
+        <span className="px-2 py-0.5 bg-blue-100 text-blue-700 text-xs font-bold rounded">
+          Previously in Sprint
+        </span>
+      );
+    }
+    
+    return null;
   };
 
   // Get selected tasks for display (with epic names)
@@ -703,8 +821,6 @@ export default function SprintCreationModal({
                 </div>
               </div>
 
-           
-
               {/* Selected Items Preview */}
               <div className="space-y-4">
                 {/* Selected Tasks Preview */}
@@ -787,7 +903,7 @@ export default function SprintCreationModal({
                             return (
                               <div
                                 key={task._id}
-                                className={`p-3 border-2 rounded-xl ${task.isCarriedOver ? 'border-orange-200 bg-orange-50' : 'border-slate-200 bg-white'}`}
+                                className={`p-3 border-2 rounded-xl ${task.isCarriedOver ? 'border-orange-200 bg-orange-50' : task.wasInSprint ? 'border-blue-200 bg-blue-50' : 'border-slate-200 bg-white'}`}
                               >
                                 <div className="flex items-center justify-between">
                                   <div className="flex-1">
@@ -795,11 +911,7 @@ export default function SprintCreationModal({
                                       <span className="text-sm font-medium text-black">
                                         {getTaskDisplayText(task)}
                                       </span>
-                                      {task.isCarriedOver && (
-                                        <span className="px-2 py-0.5 bg-orange-100 text-orange-700 text-xs font-bold rounded">
-                                          Carried Over
-                                        </span>
-                                      )}
+                                      {getTaskStatusBadge(task)}
                                     </div>
                                     
                                     {/* Show epic name if task has epic */}
@@ -836,6 +948,11 @@ export default function SprintCreationModal({
                                           'bg-blue-100 text-blue-700'
                                         }`}>
                                           {task.priority}
+                                        </span>
+                                      )}
+                                      {task.lastSprintStatus && (
+                                        <span className="px-2 py-0.5 bg-purple-100 text-purple-700 text-xs font-bold rounded">
+                                          Previous: {task.lastSprintStatus}
                                         </span>
                                       )}
                                     </div>
@@ -982,6 +1099,96 @@ export default function SprintCreationModal({
                                 Epic: {task.epicName}
                               </span>
                             )}
+                            <div className="flex items-center gap-2 mt-1">
+                              {task.storyPoints && task.storyPoints > 0 && (
+                                <span className="px-2 py-0.5 bg-blue-100 text-blue-700 text-xs font-bold rounded">
+                                  {task.storyPoints} pts
+                                </span>
+                              )}
+                              {task.lastSprintStatus && (
+                                <span className="px-2 py-0.5 bg-purple-100 text-purple-700 text-xs font-bold rounded">
+                                  Was: {task.lastSprintStatus}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Recently Moved to Backlog Tasks Section */}
+              {recentlyMovedToBacklogTasks.length > 0 && (
+                <div>
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center gap-2">
+                      <Clock size={16} className="text-blue-600" />
+                      <h3 className="font-bold text-slate-800">
+                        Recently Moved to Backlog ({recentlyMovedToBacklogTasks.length})
+                      </h3>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-bold text-blue-600">
+                        {recentlyMovedToBacklogTasks.filter(task => selectedTasks.includes(task._id)).length} selected
+                      </span>
+                      <button
+                        type="button"
+                        onClick={handleSelectAllRecentlyMoved}
+                        className="px-2 py-1 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-lg transition-colors"
+                      >
+                        Select All
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleDeselectAllRecentlyMoved}
+                        className="px-2 py-1 bg-red-600 hover:bg-red-700 text-white text-xs font-bold rounded-lg transition-colors"
+                      >
+                        Deselect All
+                      </button>
+                    </div>
+                  </div>
+                  
+                  <div className="space-y-2 max-h-48 overflow-y-auto pr-2 custom-scrollbar mb-4">
+                    {recentlyMovedToBacklogTasks.map((task) => (
+                      <div
+                        key={task._id}
+                        className={`p-3 border-2 rounded-xl cursor-pointer transition-all ${
+                          selectedTasks.includes(task._id)
+                            ? 'border-blue-500 bg-blue-50'
+                            : 'border-slate-200 hover:border-slate-300'
+                        }`}
+                        onClick={() => handleTaskToggle(task._id, task.storyPoints)}
+                      >
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="checkbox"
+                            checked={selectedTasks.includes(task._id)}
+                            onChange={() => handleTaskToggle(task._id, task.storyPoints)}
+                            className="rounded"
+                          />
+                          <div className="flex-1">
+                            <span className="text-sm font-medium text-black block">
+                              {getTaskDisplayText(task)}
+                            </span>
+                            {task.epicName && (
+                              <span className="text-xs text-gray-600 mt-1 block">
+                                Epic: {task.epicName}
+                              </span>
+                            )}
+                            <div className="flex items-center gap-2 mt-1">
+                              {task.storyPoints && task.storyPoints > 0 && (
+                                <span className="px-2 py-0.5 bg-blue-100 text-blue-700 text-xs font-bold rounded">
+                                  {task.storyPoints} pts
+                                </span>
+                              )}
+                              {task.lastSprintStatus && (
+                                <span className="px-2 py-0.5 bg-purple-100 text-purple-700 text-xs font-bold rounded">
+                                  Previously: {task.lastSprintStatus}
+                                </span>
+                              )}
+                            </div>
                           </div>
                         </div>
                       </div>
@@ -994,18 +1201,21 @@ export default function SprintCreationModal({
               <div>
                 <div className="flex items-center justify-between mb-3">
                   <h3 className="font-bold text-slate-800 flex items-center gap-2">
-                    <List size={16} className="text-blue-600" />
+                    <List size={16} className="text-green-600" />
                     Available Tasks ({backlogTasks.length})
                   </h3>
                   <div className="flex items-center gap-2">
                     <span className="text-xs font-bold text-slate-500">
-                      {selectedTasks.filter(id => !carriedOverTasks.some(task => task._id === id)).length} selected
+                      {selectedTasks.filter(id => 
+                        !carriedOverTasks.some(task => task._id === id) && 
+                        !recentlyMovedToBacklogTasks.some(task => task._id === id)
+                      ).length} selected
                     </span>
                     {selectedProjectTasks.length > 0 && (
                       <button
                         type="button"
                         onClick={handleSelectAllProjectTasks}
-                        className="px-2 py-1 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-lg transition-colors"
+                        className="px-2 py-1 bg-green-600 hover:bg-green-700 text-white text-xs font-bold rounded-lg transition-colors"
                       >
                         Select All
                       </button>
@@ -1015,7 +1225,7 @@ export default function SprintCreationModal({
                 
                 {loadingBacklog ? (
                   <div className="text-center py-8">
-                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto mb-2"></div>
+                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-green-600 mx-auto mb-2"></div>
                     <p className="text-sm text-gray-600">Loading available tasks...</p>
                   </div>
                 ) : backlogTasks.length === 0 ? (
@@ -1026,47 +1236,60 @@ export default function SprintCreationModal({
                   </div>
                 ) : (
                   <div className="space-y-2 max-h-96 overflow-y-auto pr-2 custom-scrollbar">
-                    {backlogTasks.map((task) => (
-                      <div
-                        key={task._id}
-                        className={`p-3 border-2 rounded-xl cursor-pointer transition-all ${
-                          selectedTasks.includes(task._id)
-                            ? 'border-blue-500 bg-blue-50'
-                            : 'border-slate-200 hover:border-slate-300'
-                        }`}
-                        onClick={() => handleTaskToggle(task._id, task.storyPoints)}
-                      >
-                        <div className="flex items-center justify-between">
-                          <div className="flex-1">
-                            <div className="flex items-center gap-2">
-                              <input
-                                type="checkbox"
-                                checked={selectedTasks.includes(task._id)}
-                                onChange={() => handleTaskToggle(task._id, task.storyPoints)}
-                                className="rounded"
-                              />
-                              <div>
-                                <span className="text-sm font-medium text-black block">
-                                  {getTaskDisplayText(task)}
-                                </span>
-                                {task.epicName && (
-                                  <span className="text-xs text-gray-600 mt-1 block">
-                                    Epic: {task.epicName}
+                    {backlogTasks.map((task) => {
+                      // Skip tasks that are already in carried-over or recently moved sections
+                      if (carriedOverTasks.some(ct => ct._id === task._id) || 
+                          recentlyMovedToBacklogTasks.some(rm => rm._id === task._id)) {
+                        return null;
+                      }
+                      
+                      return (
+                        <div
+                          key={task._id}
+                          className={`p-3 border-2 rounded-xl cursor-pointer transition-all ${
+                            selectedTasks.includes(task._id)
+                              ? 'border-green-500 bg-green-50'
+                              : 'border-slate-200 hover:border-slate-300'
+                          }`}
+                          onClick={() => handleTaskToggle(task._id, task.storyPoints)}
+                        >
+                          <div className="flex items-center justify-between">
+                            <div className="flex-1">
+                              <div className="flex items-center gap-2">
+                                <input
+                                  type="checkbox"
+                                  checked={selectedTasks.includes(task._id)}
+                                  onChange={() => handleTaskToggle(task._id, task.storyPoints)}
+                                  className="rounded"
+                                />
+                                <div>
+                                  <span className="text-sm font-medium text-black block">
+                                    {getTaskDisplayText(task)}
                                   </span>
-                                )}
+                                  {task.epicName && (
+                                    <span className="text-xs text-gray-600 mt-1 block">
+                                      Epic: {task.epicName}
+                                    </span>
+                                  )}
+                                  {task.wasInSprint && !task.isCarriedOver && (
+                                    <span className="text-xs text-blue-600 mt-1 block font-medium">
+                                      ✓ Was in previous sprint
+                                    </span>
+                                  )}
+                                </div>
                               </div>
                             </div>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            {task.storyPoints && task.storyPoints > 0 && (
-                              <span className="px-2 py-0.5 bg-blue-100 text-blue-700 text-xs font-bold rounded">
-                                {task.storyPoints} pts
-                              </span>
-                            )}
+                            <div className="flex items-center gap-2">
+                              {task.storyPoints && task.storyPoints > 0 && (
+                                <span className="px-2 py-0.5 bg-blue-100 text-blue-700 text-xs font-bold rounded">
+                                  {task.storyPoints} pts
+                                </span>
+                              )}
+                            </div>
                           </div>
                         </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
               </div>
@@ -1075,7 +1298,7 @@ export default function SprintCreationModal({
               <div>
                 <div className="flex items-center justify-between mb-3">
                   <h3 className="font-bold text-slate-800 flex items-center gap-2">
-                    <Target size={16} className="text-green-600" />
+                    <Target size={16} className="text-purple-600" />
                     Available Epics ({backlogEpics.length})
                   </h3>
                   <div className="flex items-center gap-2">
@@ -1087,7 +1310,7 @@ export default function SprintCreationModal({
                 
                 {loadingBacklog ? (
                   <div className="text-center py-8">
-                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-green-600 mx-auto mb-2"></div>
+                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-purple-600 mx-auto mb-2"></div>
                     <p className="text-sm text-gray-600">Loading available epics...</p>
                   </div>
                 ) : backlogEpics.length === 0 ? (
@@ -1103,7 +1326,7 @@ export default function SprintCreationModal({
                         key={epic._id}
                         className={`p-3 border-2 rounded-xl cursor-pointer transition-all ${
                           selectedEpics.includes(epic._id)
-                            ? 'border-green-500 bg-green-50'
+                            ? 'border-purple-500 bg-purple-50'
                             : 'border-slate-200 hover:border-slate-300'
                         }`}
                         onClick={() => handleEpicToggle(epic._id)}

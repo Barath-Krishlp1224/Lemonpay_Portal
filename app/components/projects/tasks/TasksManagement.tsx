@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useCallback } from "react";
 import { 
   FileText, PlusCircle, Edit2, Trash2, ArrowLeft, Check,
   Tag, X, Search, Calendar, Filter, Clock, Flag, 
@@ -9,7 +9,9 @@ import {
   GitBranch, MessageSquare, Paperclip, Eye, EyeOff,
   ChevronDown, ChevronUp, MoreVertical, ExternalLink,
   User, AlertTriangle, Bug, ClipboardCheck, Bookmark,
-  Archive
+  Archive, Layers, BarChart, PieChart, ListTree,
+  UserCircle, Mail, Phone, Briefcase, MapPin,
+  CheckSquare, Square
 } from "lucide-react";
 import type { Employee, SavedProject, Task as TaskType, Epic } from "@/app/types/project";
 
@@ -23,6 +25,7 @@ interface Subtask {
   taskId: string;
   createdAt: string;
   updatedAt: string;
+  description?: string;
 }
 
 interface Task {
@@ -38,6 +41,10 @@ interface Task {
   reporterIds: string[];
   assigneeNames?: string[];
   reporterNames?: string[];
+  assigneeEmails?: string[];
+  reporterEmails?: string[];
+  assigneeRoles?: string[];
+  reporterRoles?: string[];
   epicId: string;
   epicName: string;
   storyPoints: number;
@@ -52,6 +59,8 @@ interface Task {
   createdBy: string;
   createdAt: string;
   updatedAt: string;
+  estimatedHours?: number;
+  actualHours?: number;
 }
 
 interface Comment {
@@ -103,16 +112,74 @@ export default function TasksManagement({
     currentLabel: "",
     dueDate: "",
     duration: 7,
+    estimatedHours: 0,
+    actualHours: 0,
   });
-
-  // --- Comment State ---
-  const [newComment, setNewComment] = useState<Record<string, string>>({});
-  const [showComments, setShowComments] = useState<Record<string, boolean>>({});
 
   // --- View Mode State ---
   const [viewTaskId, setViewTaskId] = useState<string | null>(null);
   const [isViewMode, setIsViewMode] = useState(false);
 
+  // --- Missing Functions ---
+  const handleAddLabel = useCallback(() => {
+    if (taskFormData.currentLabel.trim() && !taskFormData.labels.includes(taskFormData.currentLabel.trim())) {
+      setTaskFormData(prev => ({
+        ...prev,
+        labels: [...prev.labels, prev.currentLabel.trim()],
+        currentLabel: ""
+      }));
+    }
+  }, [taskFormData.currentLabel, taskFormData.labels]);
+
+  const handleRemoveLabel = useCallback((label: string) => {
+    setTaskFormData(prev => ({
+      ...prev,
+      labels: prev.labels.filter(l => l !== label)
+    }));
+  }, []);
+
+  const handleLabelKeyPress = useCallback((e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      handleAddLabel();
+    }
+  }, [handleAddLabel]);
+
+  const handleAssigneeToggle = useCallback((employeeId: string) => {
+    setTaskFormData(prev => {
+      const currentAssigneeIds = [...prev.assigneeIds];
+      if (currentAssigneeIds.includes(employeeId)) {
+        return {
+          ...prev,
+          assigneeIds: currentAssigneeIds.filter(id => id !== employeeId)
+        };
+      } else {
+        return {
+          ...prev,
+          assigneeIds: [...currentAssigneeIds, employeeId]
+        };
+      }
+    });
+  }, []);
+
+  const handleReporterToggle = useCallback((employeeId: string) => {
+    setTaskFormData(prev => {
+      const currentReporterIds = [...prev.reporterIds];
+      if (currentReporterIds.includes(employeeId)) {
+        return {
+          ...prev,
+          reporterIds: currentReporterIds.filter(id => id !== employeeId)
+        };
+      } else {
+        return {
+          ...prev,
+          reporterIds: [...currentReporterIds, employeeId]
+        };
+      }
+    });
+  }, []);
+
+  // Fetch tasks with all subtasks and assignee details
   const fetchTasks = async (epicId: string) => {
     if (!epicId) return;
     
@@ -122,13 +189,13 @@ export default function TasksManagement({
       let data;
       
       try {
-        response = await fetch(`/api/tasks?epicId=${epicId}`);
+        response = await fetch(`/api/tasks?epicId=${epicId}&includeSubtasks=true&populateAssignees=true`);
         if (!response.ok) throw new Error(`Tasks endpoint failed: ${response.status}`);
         data = await response.json();
       } catch (err) {
         console.log('Tasks endpoint failed, trying projects endpoint...');
         if (selectedProject) {
-          response = await fetch(`/api/projects/${selectedProject._id}/tasks`);
+          response = await fetch(`/api/projects/${selectedProject._id}/tasks?includeSubtasks=true&populateAssignees=true`);
           if (!response.ok) throw new Error(`Projects endpoint failed: ${response.status}`);
           data = await response.json();
         } else {
@@ -156,7 +223,50 @@ export default function TasksManagement({
         tasksArray = tasksArray.filter(task => task.epicId === epicId);
       }
       
-      console.log('Processed tasks:', tasksArray);
+      // Ensure subtasks and assignee info are properly populated
+      tasksArray = tasksArray.map(task => {
+        // Ensure assigneeNames exist
+        let assigneeNames = task.assigneeNames || [];
+        if (!assigneeNames.length && task.assigneeIds?.length > 0) {
+          assigneeNames = employees
+            .filter(emp => task.assigneeIds.includes(emp._id))
+            .map(emp => emp.name);
+        }
+        
+        // Ensure reporterNames exist
+        let reporterNames = task.reporterNames || [];
+        if (!reporterNames.length && task.reporterIds?.length > 0) {
+          reporterNames = employees
+            .filter(emp => task.reporterIds.includes(emp._id))
+            .map(emp => emp.name);
+        }
+        
+        // Ensure subtasks have assignee info
+        let subtasks = task.subtasks || [];
+        subtasks = subtasks.map(subtask => {
+          // If subtask doesn't have assigneeName, try to get it from employees
+          if (!subtask.assigneeName && subtask.assigneeId) {
+            const assignee = employees.find(emp => emp._id === subtask.assigneeId);
+            if (assignee) {
+              return {
+                ...subtask,
+                assigneeName: assignee.name
+              };
+            }
+          }
+          return subtask;
+        });
+        
+        return {
+          ...task,
+          assigneeNames,
+          reporterNames,
+          subtasks,
+          issueKey: task.issueKey || task.taskId || `TASK-${task._id?.substring(0, 8)}`
+        };
+      });
+      
+      console.log('Processed tasks with assignee info:', tasksArray);
       setTasks(tasksArray);
     } catch (err: any) {
       console.error("Failed to fetch tasks:", err);
@@ -173,7 +283,7 @@ export default function TasksManagement({
     } else {
       setTasks([]);
     }
-  }, [selectedEpic]);
+  }, [selectedEpic, employees]);
 
   const handleTaskSubmit = async () => {
     if (!selectedProject || !selectedEpic || !taskFormData.summary.trim()) {
@@ -192,6 +302,10 @@ export default function TasksManagement({
 
       const assigneeNames = selectedAssignees.map(emp => emp.name);
       const reporterNames = selectedReporters.map(emp => emp.name);
+      const assigneeEmails = selectedAssignees.map(emp => emp.email || "");
+      const reporterEmails = selectedReporters.map(emp => emp.email || "");
+      const assigneeRoles = selectedAssignees.map(emp => emp.role || "Employee");
+      const reporterRoles = selectedReporters.map(emp => emp.role || "Employee");
 
       let url, method, response, data;
       
@@ -206,6 +320,10 @@ export default function TasksManagement({
             ...taskFormData,
             assigneeNames: assigneeNames,
             reporterNames: reporterNames,
+            assigneeEmails: assigneeEmails,
+            reporterEmails: reporterEmails,
+            assigneeRoles: assigneeRoles,
+            reporterRoles: reporterRoles,
             epicId: selectedEpic._id,
             epicName: selectedEpic.name,
             projectId: selectedProject._id,
@@ -219,6 +337,10 @@ export default function TasksManagement({
           ...taskFormData,
           assigneeNames: assigneeNames,
           reporterNames: reporterNames,
+          assigneeEmails: assigneeEmails,
+          reporterEmails: reporterEmails,
+          assigneeRoles: assigneeRoles,
+          reporterRoles: reporterRoles,
           epicId: selectedEpic._id,
           epicName: selectedEpic.name,
           projectId: selectedProject._id,
@@ -265,6 +387,8 @@ export default function TasksManagement({
           currentLabel: "",
           dueDate: "",
           duration: 7,
+          estimatedHours: 0,
+          actualHours: 0,
         });
         
         await fetchTasks(selectedEpic._id);
@@ -296,6 +420,8 @@ export default function TasksManagement({
       currentLabel: "",
       dueDate: task.dueDate ? task.dueDate.split('T')[0] : "",
       duration: task.duration || 7,
+      estimatedHours: task.estimatedHours || 0,
+      actualHours: task.actualHours || 0,
     });
     setEditingTaskId(task._id);
     setShowTaskForm(true);
@@ -323,105 +449,6 @@ export default function TasksManagement({
       setLoading(false);
       setTimeout(() => setMessage(""), 5000);
     }
-  };
-
-  const handleAddComment = async (taskId: string) => {
-    const comment = newComment[taskId];
-    if (!comment?.trim()) return;
-
-    try {
-      let response;
-      
-      try {
-        response = await fetch(`/api/tasks/${taskId}/comments`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ content: comment }),
-        });
-      } catch (err) {
-        const task = tasks.find(t => t._id === taskId);
-        if (task) {
-          response = await fetch(`/api/tasks/${taskId}`, {
-            method: "PUT",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              ...task,
-              comments: [...(task.comments || []), {
-                userId: employees[0]?._id || "",
-                userName: employees[0]?.name || "User",
-                content: comment,
-                createdAt: new Date().toISOString()
-              }]
-            }),
-          });
-        }
-      }
-
-      if (response && response.ok) {
-        setNewComment(prev => ({ ...prev, [taskId]: "" }));
-        await fetchTasks(selectedEpic!._id);
-      }
-    } catch (err) {
-      console.error("Failed to add comment:", err);
-    }
-  };
-
-  const handleAddLabel = () => {
-    if (taskFormData.currentLabel.trim() && !taskFormData.labels.includes(taskFormData.currentLabel.trim())) {
-      setTaskFormData(prev => ({
-        ...prev,
-        labels: [...prev.labels, prev.currentLabel.trim()],
-        currentLabel: ""
-      }));
-    }
-  };
-
-  const handleRemoveLabel = (label: string) => {
-    setTaskFormData(prev => ({
-      ...prev,
-      labels: prev.labels.filter(l => l !== label)
-    }));
-  };
-
-  const handleLabelKeyPress = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      handleAddLabel();
-    }
-  };
-
-  const handleAssigneeToggle = (employeeId: string) => {
-    setTaskFormData(prev => {
-      const currentAssigneeIds = [...prev.assigneeIds];
-      if (currentAssigneeIds.includes(employeeId)) {
-        return {
-          ...prev,
-          assigneeIds: currentAssigneeIds.filter(id => id !== employeeId)
-        };
-      } else {
-        return {
-          ...prev,
-          assigneeIds: [...currentAssigneeIds, employeeId]
-        };
-      }
-    });
-  };
-
-  const handleReporterToggle = (employeeId: string) => {
-    setTaskFormData(prev => {
-      const currentReporterIds = [...prev.reporterIds];
-      if (currentReporterIds.includes(employeeId)) {
-        return {
-          ...prev,
-          reporterIds: currentReporterIds.filter(id => id !== employeeId)
-        };
-      } else {
-        return {
-          ...prev,
-          reporterIds: [...currentReporterIds, employeeId]
-        };
-      }
-    });
   };
 
   const handleViewTask = (task: Task) => {
@@ -534,24 +561,28 @@ export default function TasksManagement({
     }
   };
 
-  const toggleTaskExpand = (taskId: string) => {
-    setExpandedTaskId(expandedTaskId === taskId ? null : taskId);
-  };
-
-  const toggleComments = (taskId: string) => {
-    setShowComments(prev => ({
-      ...prev,
-      [taskId]: !prev[taskId]
-    }));
-  };
-
   const formatDate = (dateString: string) => {
-    if (!dateString) return "N/A";
+    if (!dateString) return "Not set";
     try {
       return new Date(dateString).toLocaleDateString('en-US', {
         month: 'short',
         day: 'numeric',
         year: 'numeric'
+      });
+    } catch {
+      return dateString;
+    }
+  };
+
+  const formatDateTime = (dateString: string) => {
+    if (!dateString) return "Not set";
+    try {
+      return new Date(dateString).toLocaleString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
       });
     } catch {
       return dateString;
@@ -567,11 +598,41 @@ export default function TasksManagement({
   };
 
   const getTaskAssignees = (task: Task) => {
-    return employees.filter(emp => task.assigneeIds?.includes(emp._id));
+    const assigneeIds = task.assigneeIds || [];
+    const assigneeNames = task.assigneeNames || [];
+    
+    // If we have assigneeNames but want full employee info, try to match
+    if (assigneeNames.length > 0 && assigneeIds.length === 0) {
+      return assigneeNames.map((name, index) => ({
+        _id: `assignee-${index}`,
+        name: name,
+        email: task.assigneeEmails?.[index] || "",
+        role: task.assigneeRoles?.[index] || "Employee",
+        department: "",
+        status: "active"
+      }));
+    }
+    
+    return employees.filter(emp => assigneeIds.includes(emp._id));
   };
 
   const getTaskReporters = (task: Task) => {
-    return employees.filter(emp => task.reporterIds?.includes(emp._id));
+    const reporterIds = task.reporterIds || [];
+    const reporterNames = task.reporterNames || [];
+    
+    // If we have reporterNames but want full employee info, try to match
+    if (reporterNames.length > 0 && reporterIds.length === 0) {
+      return reporterNames.map((name, index) => ({
+        _id: `reporter-${index}`,
+        name: name,
+        email: task.reporterEmails?.[index] || "",
+        role: task.reporterRoles?.[index] || "Employee",
+        department: "",
+        status: "active"
+      }));
+    }
+    
+    return employees.filter(emp => reporterIds.includes(emp._id));
   };
 
   const getTaskAssigneeDisplay = (task: Task) => {
@@ -610,6 +671,29 @@ export default function TasksManagement({
       todo,
       overallProgress
     };
+  };
+
+  // Calculate task progress based on subtasks or status
+  const calculateTaskProgress = (task: Task) => {
+    if (task.subtasks && task.subtasks.length > 0) {
+      return calculateSubtaskProgress(task.subtasks).overallProgress;
+    }
+    
+    // Fallback to status-based progress
+    switch (task.status) {
+      case "Done": return 100;
+      case "Review": return 75;
+      case "In Progress": return 50;
+      case "Todo": return 10;
+      case "Backlog": return 0;
+      case "Blocked": return 0;
+      default: return 0;
+    }
+  };
+
+  // Get employee details by ID
+  const getEmployeeById = (id: string) => {
+    return employees.find(emp => emp._id === id);
   };
 
   if (!selectedProject) {
@@ -691,6 +775,8 @@ export default function TasksManagement({
                   currentLabel: "",
                   dueDate: "",
                   duration: 7,
+                  estimatedHours: 0,
+                  actualHours: 0,
                 });
               }}
               className="px-4 py-2 bg-[#3fa87d] hover:bg-[#35946d] text-white text-xs font-bold rounded-xl transition-colors flex items-center gap-2"
@@ -808,6 +894,7 @@ export default function TasksManagement({
                     const assigneeNames = getTaskAssigneeDisplay(task);
                     const reporterNames = getTaskReporterDisplay(task);
                     const subtaskProgress = calculateSubtaskProgress(task.subtasks);
+                    const taskProgress = calculateTaskProgress(task);
                     
                     return (
                       <div 
@@ -850,7 +937,7 @@ export default function TasksManagement({
                                 }}
                                 className="p-1 hover:bg-red-100 text-red-600 rounded-lg transition-colors"
                                 title="Delete Task"
-                                >
+                              >
                                 <Trash2 size={14} />
                               </button>
                             </div>
@@ -876,20 +963,35 @@ export default function TasksManagement({
                             )}
                           </div>
 
-                          {/* Subtasks Progress Bar (if any) */}
+                          {/* Progress Bar */}
+                          <div className="mb-3">
+                            <div className="flex items-center justify-between mb-1">
+                              <span className="text-xs font-bold text-slate-700">Progress</span>
+                              <span className="text-xs font-bold text-slate-700">{taskProgress}%</span>
+                            </div>
+                            <div className="w-full bg-slate-200 rounded-full h-2">
+                              <div 
+                                className={`h-2 rounded-full ${
+                                  taskProgress === 100 ? 'bg-green-500' :
+                                  taskProgress >= 50 ? 'bg-blue-500' :
+                                  'bg-yellow-500'
+                                }`}
+                                style={{ width: `${taskProgress}%` }}
+                              />
+                            </div>
+                          </div>
+
+                          {/* Subtasks Summary */}
                           {task.subtasks && task.subtasks.length > 0 && (
-                            <div className="mb-3">
-                              <div className="flex items-center justify-between mb-1">
-                                <span className="text-xs font-bold text-slate-700">Subtasks Progress</span>
+                            <div className="mb-3 p-3 bg-slate-50 rounded-xl border border-slate-200">
+                              <div className="flex items-center justify-between mb-2">
+                                <div className="flex items-center gap-2">
+                                  <ListTree size={14} className="text-slate-500" />
+                                  <span className="text-xs font-bold text-slate-700">Subtasks</span>
+                                </div>
                                 <span className="text-xs font-bold text-slate-700">{subtaskProgress.overallProgress}%</span>
                               </div>
-                              <div className="w-full bg-slate-200 rounded-full h-2">
-                                <div 
-                                  className="bg-[#3fa87d] h-2 rounded-full transition-all duration-300"
-                                  style={{ width: `${subtaskProgress.overallProgress}%` }}
-                                />
-                              </div>
-                              <div className="flex justify-between text-[10px] text-slate-500 mt-1">
+                              <div className="flex justify-between text-[10px] text-slate-500">
                                 <span>Total: {subtaskProgress.total}</span>
                                 <span>Done: {subtaskProgress.done}</span>
                                 <span>In Progress: {subtaskProgress.inProgress}</span>
@@ -957,10 +1059,10 @@ export default function TasksManagement({
                                 </div>
                               )}
                             </div>
-                            <div className="flex items-center gap-1">
+                            <div className="flex items-center gap-2">
                               <MessageSquare size={12} className="text-slate-400" />
                               <span className="text-xs text-slate-500">
-                                {task.comments?.length || 0} comments
+                                {task.comments?.length || 0}
                               </span>
                             </div>
                           </div>
@@ -1291,6 +1393,32 @@ export default function TasksManagement({
                     </div>
                   </div>
 
+                  {/* Hours Tracking */}
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-black text-slate-500 uppercase">Estimated Hours</label>
+                      <input
+                        type="number"
+                        min="0"
+                        value={taskFormData.estimatedHours}
+                        onChange={(e) => setTaskFormData({...taskFormData, estimatedHours: Math.max(0, parseInt(e.target.value) || 0)})}
+                        className="w-full px-3 py-2 bg-slate-50 border-2 border-slate-200 rounded-xl text-sm font-bold outline-none focus:border-[#3fa87d] transition-all"
+                        placeholder="Estimated hours to complete"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-black text-slate-500 uppercase">Actual Hours</label>
+                      <input
+                        type="number"
+                        min="0"
+                        value={taskFormData.actualHours}
+                        onChange={(e) => setTaskFormData({...taskFormData, actualHours: Math.max(0, parseInt(e.target.value) || 0)})}
+                        className="w-full px-3 py-2 bg-slate-50 border-2 border-slate-200 rounded-xl text-sm font-bold outline-none focus:border-[#3fa87d] transition-all"
+                        placeholder="Hours spent so far"
+                      />
+                    </div>
+                  </div>
+
                   {/* Submit Button */}
                   <div className="pt-4 border-t border-slate-100">
                     <button
@@ -1313,11 +1441,11 @@ export default function TasksManagement({
           </div>
         )}
 
-        {/* View Task Modal */}
+        {/* View Task Modal - UPDATED WITH ALL INFO AND SCROLLABLE SUBTASKS */}
         {isViewMode && viewTask && (
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={() => setIsViewMode(false)}>
             <div 
-              className="bg-white rounded-3xl border-2 border-slate-200 shadow-2xl w-full max-w-4xl max-h-[80vh] flex flex-col"
+              className="bg-white rounded-3xl border-2 border-slate-200 shadow-2xl w-full max-w-6xl max-h-[70vh] mt-1 flex flex-col"
               onClick={(e) => e.stopPropagation()}
             >
               {/* Modal Header */}
@@ -1333,315 +1461,449 @@ export default function TasksManagement({
                   >
                     <X size={18} className="text-slate-500" />
                   </button>
-                  <h2 className="text-xl font-bold text-slate-800">Task Details</h2>
                   <div className="flex items-center gap-2">
-                    <div className={`px-3 py-1 rounded-lg text-xs font-black flex items-center gap-1 ${getIssueTypeColor(viewTask.issueType)}`}>
-                      {getIssueTypeIcon(viewTask.issueType)}
-                      <span>{viewTask.issueType}</span>
-                    </div>
-                    <div className={`px-3 py-1 rounded-lg text-xs font-black flex items-center gap-1 ${getStatusColor(viewTask.status)}`}>
-                      {getStatusIcon(viewTask.status)}
-                      <span>{viewTask.status}</span>
+                    <h2 className="text-xl font-bold text-slate-800">Task Details</h2>
+                    <div className="flex items-center gap-2">
+                      <div className={`px-3 py-1 rounded-lg text-xs font-black flex items-center gap-1 ${getIssueTypeColor(viewTask.issueType)}`}>
+                        {getIssueTypeIcon(viewTask.issueType)}
+                        <span>{viewTask.issueType}</span>
+                      </div>
+                      <div className={`px-3 py-1 rounded-lg text-xs font-black flex items-center gap-1 ${getStatusColor(viewTask.status)}`}>
+                        {getStatusIcon(viewTask.status)}
+                        <span>{viewTask.status}</span>
+                      </div>
                     </div>
                   </div>
                 </div>
-                <div className="flex items-center gap-2">
-                  <div className="px-3 py-1 bg-slate-100 text-slate-600 text-xs font-bold rounded-full">
+                <div className="flex items-center gap-3">
+                  <div className="px-3 py-1 bg-slate-100 text-slate-600 text-xs font-bold rounded-full font-mono">
                     {viewTask.issueKey || "No ID"}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => handleEditTask(viewTask)}
+                      className="px-4 py-2 bg-blue-600 text-white text-xs font-bold rounded-xl hover:bg-blue-700 transition-colors flex items-center gap-2"
+                    >
+                      <Edit2 size={14} /> Edit
+                    </button>
                   </div>
                 </div>
               </div>
 
               {/* Modal Content - Scrollable */}
-              <div className="flex-1 overflow-y-auto p-6">
-                <div className="space-y-6">
-                  {/* Task Summary */}
-                  <div className="space-y-2">
-                    <h3 className="text-2xl font-bold text-slate-800">{viewTask.summary || "No title"}</h3>
-                    <div className="flex items-center gap-4 text-sm text-slate-500">
-                      <div className="flex items-center gap-1">
-                        <Calendar size={14} />
-                        Created: {formatDate(viewTask.createdAt)}
-                      </div>
-                      <div className="flex items-center gap-1">
-                        <Calendar size={14} />
-                        Updated: {formatDate(viewTask.updatedAt)}
-                      </div>
-                      {viewTask.dueDate && (
-                        <div className="flex items-center gap-1">
-                          <Clock size={14} />
-                          Due: {formatDate(viewTask.dueDate)}
+              <div className="flex-1 overflow-hidden flex">
+                {/* Left Column - Task Details */}
+                <div className="flex-1 overflow-y-auto p-6 border-r border-slate-100">
+                  <div className="space-y-6">
+                    {/* Task Summary */}
+                    <div className="space-y-4">
+                      <h3 className="text-2xl font-bold text-slate-800">{viewTask.summary || "No title"}</h3>
+                      {viewTask.description && (
+                        <div className="space-y-2">
+                          <h4 className="text-sm font-bold text-slate-700 flex items-center gap-2">
+                            <FileText size={16} />
+                            Description
+                          </h4>
+                          <div className="p-4 bg-slate-50 rounded-xl border border-slate-200">
+                            <p className="text-slate-700 whitespace-pre-wrap">{viewTask.description}</p>
+                          </div>
                         </div>
                       )}
                     </div>
-                  </div>
 
-                  {/* Priority and Duration */}
-                  <div className="grid grid-cols-3 gap-4">
-                    <div className="space-y-2">
-                      <label className="text-xs font-bold text-slate-500 uppercase">Priority</label>
-                      <div className={`px-4 py-3 rounded-xl text-sm font-bold flex items-center gap-2 ${getPriorityColor(viewTask.priority)}`}>
-                        {getPriorityIcon(viewTask.priority)}
-                        <span>{viewTask.priority}</span>
+                    {/* Key Information Cards */}
+                    <div className="grid grid-cols-3 gap-4">
+                      <div className="space-y-2">
+                        <label className="text-xs font-bold text-slate-500 uppercase">Priority</label>
+                        <div className={`px-4 py-3 rounded-xl text-sm font-bold flex items-center gap-2 ${getPriorityColor(viewTask.priority)}`}>
+                          {getPriorityIcon(viewTask.priority)}
+                          <span>{viewTask.priority}</span>
+                        </div>
+                      </div>
+                      <div className="space-y-2">
+                        <label className="text-xs font-bold text-slate-500 uppercase">Story Points</label>
+                        <div className="px-4 py-3 bg-slate-100 text-slate-800 rounded-xl text-sm font-bold flex items-center gap-2">
+                          <BarChart size={16} className="text-slate-500" />
+                          {viewTask.storyPoints || 0} SP
+                        </div>
+                      </div>
+                      <div className="space-y-2">
+                        <label className="text-xs font-bold text-slate-500 uppercase">Progress</label>
+                        <div className="px-4 py-3 bg-slate-100 text-slate-800 rounded-xl">
+                          <div className="text-sm font-bold mb-1">{calculateTaskProgress(viewTask)}%</div>
+                          <div className="w-full bg-slate-200 rounded-full h-2">
+                            <div 
+                              className={`h-2 rounded-full ${
+                                calculateTaskProgress(viewTask) === 100 ? 'bg-green-500' :
+                                calculateTaskProgress(viewTask) >= 50 ? 'bg-blue-500' :
+                                'bg-yellow-500'
+                              }`}
+                              style={{ width: `${calculateTaskProgress(viewTask)}%` }}
+                            />
+                          </div>
+                        </div>
                       </div>
                     </div>
-                    <div className="space-y-2">
-                      <label className="text-xs font-bold text-slate-500 uppercase">Story Points</label>
-                      <div className="px-4 py-3 bg-slate-100 text-slate-800 rounded-xl text-sm font-bold">
-                        {viewTask.storyPoints || 0} SP
-                      </div>
-                    </div>
-                    <div className="space-y-2">
-                      <label className="text-xs font-bold text-slate-500 uppercase">Duration</label>
-                      <div className="px-4 py-3 bg-slate-100 text-slate-800 rounded-xl text-sm font-bold flex items-center gap-2">
-                        <CalendarDays size={16} className="text-slate-500" />
-                        {viewTask.duration || 0} days
-                      </div>
-                    </div>
-                  </div>
 
-                  {/* Subtasks Section */}
-                  {viewTask.subtasks && viewTask.subtasks.length > 0 && (
-                    <div className="space-y-4">
-                      <h4 className="text-sm font-bold text-slate-700 flex items-center gap-2">
-                        <ClipboardCheck size={16} />
-                        Subtasks ({viewTask.subtasks.length})
-                      </h4>
-                      
-                      {/* Overall Progress Bar */}
-                      <div className="p-4 bg-slate-50 rounded-xl border border-slate-200">
-                        <div className="flex items-center justify-between mb-3">
-                          <div>
-                            <div className="font-bold text-slate-800">Overall Progress</div>
-                            <div className="text-xs text-slate-600">
-                              {calculateSubtaskProgress(viewTask.subtasks).done} of {viewTask.subtasks.length} completed
+                    {/* Dates Information */}
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="space-y-2">
+                        <label className="text-xs font-bold text-slate-500 uppercase">Timeline</label>
+                        <div className="space-y-3">
+                          <div className="flex items-center justify-between">
+                            <span className="text-sm text-slate-600">Duration:</span>
+                            <span className="text-sm font-bold text-slate-800">{viewTask.duration || 0} days</span>
+                          </div>
+                          <div className="flex items-center justify-between">
+                            <span className="text-sm text-slate-600">Created:</span>
+                            <span className="text-sm font-bold text-slate-800">{formatDateTime(viewTask.createdAt)}</span>
+                          </div>
+                          <div className="flex items-center justify-between">
+                            <span className="text-sm text-slate-600">Updated:</span>
+                            <span className="text-sm font-bold text-slate-800">{formatDateTime(viewTask.updatedAt)}</span>
+                          </div>
+                          {viewTask.dueDate && (
+                            <div className="flex items-center justify-between">
+                              <span className="text-sm text-slate-600">Due Date:</span>
+                              <span className={`text-sm font-bold ${new Date(viewTask.dueDate) < new Date() ? 'text-red-600' : 'text-slate-800'}`}>
+                                {formatDate(viewTask.dueDate)}
+                              </span>
                             </div>
-                          </div>
-                          <div className="text-lg font-bold text-slate-800">
-                            {calculateSubtaskProgress(viewTask.subtasks).overallProgress}%
-                          </div>
-                        </div>
-                        <div className="w-full bg-slate-200 rounded-full h-3 mb-2">
-                          <div 
-                            className="bg-[#3fa87d] h-3 rounded-full transition-all duration-300"
-                            style={{ width: `${calculateSubtaskProgress(viewTask.subtasks).overallProgress}%` }}
-                          />
-                        </div>
-                        <div className="flex justify-between text-xs text-slate-600">
-                          <div className="flex items-center gap-1">
-                            <div className="w-3 h-3 bg-green-500 rounded-full"></div>
-                            <span>Done: {calculateSubtaskProgress(viewTask.subtasks).done}</span>
-                          </div>
-                          <div className="flex items-center gap-1">
-                            <div className="w-3 h-3 bg-blue-500 rounded-full"></div>
-                            <span>In Progress: {calculateSubtaskProgress(viewTask.subtasks).inProgress}</span>
-                          </div>
-                          <div className="flex items-center gap-1">
-                            <div className="w-3 h-3 bg-yellow-500 rounded-full"></div>
-                            <span>Todo: {calculateSubtaskProgress(viewTask.subtasks).todo}</span>
-                          </div>
+                          )}
                         </div>
                       </div>
 
-                      {/* Subtasks List */}
+                      {/* Hours Tracking */}
+                      <div className="space-y-2">
+                        <label className="text-xs font-bold text-slate-500 uppercase">Hours Tracking</label>
+                        <div className="space-y-3">
+                          <div className="flex items-center justify-between">
+                            <span className="text-sm text-slate-600">Estimated:</span>
+                            <span className="text-sm font-bold text-slate-800">{viewTask.estimatedHours || 0} hours</span>
+                          </div>
+                          <div className="flex items-center justify-between">
+                            <span className="text-sm text-slate-600">Actual:</span>
+                            <span className="text-sm font-bold text-slate-800">{viewTask.actualHours || 0} hours</span>
+                          </div>
+                          {viewTask.estimatedHours && viewTask.actualHours && (
+                            <div className="flex items-center justify-between">
+                              <span className="text-sm text-slate-600">Variance:</span>
+                              <span className={`text-sm font-bold ${
+                                viewTask.actualHours > viewTask.estimatedHours ? 'text-red-600' : 'text-green-600'
+                              }`}>
+                                {(viewTask.actualHours - viewTask.estimatedHours).toFixed(1)} hours
+                              </span>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Labels */}
+                    {viewTask.labels && viewTask.labels.length > 0 && (
                       <div className="space-y-3">
-                        {viewTask.subtasks.map((subtask) => (
-                          <div key={subtask._id} className="p-4 bg-white rounded-xl border border-slate-200">
-                            <div className="flex items-start justify-between mb-3">
-                              <div className="flex-1">
-                                <div className="font-bold text-slate-800 mb-1">{subtask.title}</div>
-                                <div className="flex items-center gap-3">
-                                  <div className="flex items-center gap-1">
-                                    <User size={12} className="text-slate-400" />
-                                    <span className="text-xs text-slate-600">{subtask.assigneeName}</span>
-                                  </div>
-                                  <div className={`px-2 py-1 rounded-lg text-[10px] font-black flex items-center gap-1 ${getSubtaskStatusColor(subtask.status)}`}>
-                                    {getSubtaskStatusIcon(subtask.status)}
-                                    <span>{subtask.status}</span>
-                                  </div>
-                                </div>
-                              </div>
-                              <div className="text-right">
-                                <div className="text-sm font-bold text-slate-800">{subtask.progressPercentage}%</div>
-                                <div className="text-xs text-slate-500">Progress</div>
-                              </div>
-                            </div>
-                            
-                            {/* Individual Subtask Progress Bar */}
-                            <div className="w-full bg-slate-200 rounded-full h-2 mb-2">
-                              <div 
-                                className={`h-2 rounded-full transition-all duration-300 ${
-                                  subtask.status === 'Done' ? 'bg-green-500' :
-                                  subtask.status === 'In Progress' ? 'bg-blue-500' :
-                                  'bg-yellow-500'
-                                }`}
-                                style={{ width: `${subtask.progressPercentage}%` }}
-                              />
-                            </div>
-                            
-                            <div className="flex justify-between text-[10px] text-slate-500">
-                              <span>Created: {formatDate(subtask.createdAt)}</span>
-                              <span>Updated: {formatDate(subtask.updatedAt)}</span>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Description */}
-                  {viewTask.description && (
-                    <div className="space-y-3">
-                      <h4 className="text-sm font-bold text-slate-700 flex items-center gap-2">
-                        <FileText size={16} />
-                        Description
-                      </h4>
-                      <div className="p-4 bg-slate-50 rounded-xl border border-slate-200">
-                        <p className="text-slate-700 whitespace-pre-wrap">{viewTask.description}</p>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Assignees and Reporters */}
-                  <div className="grid grid-cols-2 gap-6">
-                    <div className="space-y-3">
-                      <h4 className="text-sm font-bold text-slate-700 flex items-center gap-2">
-                        <Users size={16} />
-                        Assignees
-                      </h4>
-                      {getTaskAssigneeDisplay(viewTask).length > 0 ? (
-                        <div className="space-y-2">
-                          {getTaskAssigneeDisplay(viewTask).map((name, index) => (
-                            <div key={index} className="flex items-center gap-3 p-3 bg-white rounded-xl border border-slate-200">
-                              <div className="w-8 h-8 bg-slate-300 rounded-full flex items-center justify-center text-sm font-bold">
-                                {name.charAt(0)}
-                              </div>
-                              <span className="font-bold">{name}</span>
+                        <h4 className="text-sm font-bold text-slate-700 flex items-center gap-2">
+                          <Tag size={16} />
+                          Labels
+                        </h4>
+                        <div className="flex flex-wrap gap-2">
+                          {viewTask.labels.map((label, index) => (
+                            <div key={index} className="px-3 py-1.5 bg-slate-100 text-slate-700 text-xs font-bold rounded-full border border-slate-300 flex items-center gap-1">
+                              <Tag size={12} />
+                              {label}
                             </div>
                           ))}
                         </div>
+                      </div>
+                    )}
+
+                    {/* Project & Epic Info */}
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="space-y-3">
+                        <h4 className="text-sm font-bold text-slate-700 flex items-center gap-2">
+                          <FileText size={16} />
+                          Project
+                        </h4>
+                        <div className="p-4 bg-slate-50 rounded-xl border border-slate-200">
+                          <div className="flex items-center gap-3 mb-2">
+                            <div className="w-10 h-10 bg-blue-100 rounded-lg flex items-center justify-center">
+                              <FileText size={20} className="text-blue-600" />
+                            </div>
+                            <div>
+                              <div className="font-bold text-slate-800">{selectedProject.name}</div>
+                              <div className="text-sm text-slate-600">{selectedProject.key}</div>
+                            </div>
+                          </div>
+                          {selectedProject.description && (
+                            <p className="text-sm text-slate-600 mt-2">{selectedProject.description}</p>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="space-y-3">
+                        <h4 className="text-sm font-bold text-slate-700 flex items-center gap-2">
+                          <Target size={16} />
+                          Epic
+                        </h4>
+                        <div className="p-4 bg-purple-50 rounded-xl border border-purple-200">
+                          <div className="flex items-center gap-3 mb-2">
+                            <div className="w-10 h-10 bg-purple-100 rounded-lg flex items-center justify-center">
+                              <Target size={20} className="text-purple-600" />
+                            </div>
+                            <div>
+                              <div className="font-bold text-slate-800">{selectedEpic.name}</div>
+                              <div className="text-sm text-slate-600">{selectedEpic.epicId}</div>
+                            </div>
+                          </div>
+                          {selectedEpic.description && (
+                            <p className="text-sm text-slate-600 mt-2">{selectedEpic.description}</p>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Right Column - Assignees, Reporters & Subtasks */}
+                <div className="w-96 overflow-y-auto border-l border-slate-100">
+                  <div className="p-6 space-y-6">
+                    {/* Assignees with Full Information */}
+                    <div className="space-y-4">
+                      <h4 className="text-sm font-bold text-slate-700 flex items-center gap-2">
+                        <Users size={16} />
+                        Assignees ({getTaskAssignees(viewTask).length})
+                      </h4>
+                      {getTaskAssignees(viewTask).length > 0 ? (
+                        <div className="space-y-3">
+                          {getTaskAssignees(viewTask).map((assignee, index) => {
+                            const employee = getEmployeeById(assignee._id) || assignee;
+                            return (
+                              <div key={assignee._id || index} className="p-4 bg-white rounded-xl border border-slate-200">
+                                <div className="flex items-center gap-3 mb-3">
+                                  <div className="w-12 h-12 bg-blue-100 rounded-full flex items-center justify-center text-lg font-bold text-blue-600">
+                                    {employee.name.charAt(0)}
+                                  </div>
+                                  <div className="flex-1">
+                                    <div className="font-bold text-slate-800">{employee.name}</div>
+                                    <div className="text-xs text-slate-500">{employee.role || "Employee"}</div>
+                                  </div>
+                                </div>
+                                <div className="space-y-2 text-sm">
+                                  {employee.email && (
+                                    <div className="flex items-center gap-2">
+                                      <Mail size={14} className="text-slate-400" />
+                                      <span className="text-slate-600">{employee.email}</span>
+                                    </div>
+                                  )}
+                                  {employee.department && (
+                                    <div className="flex items-center gap-2">
+                                      <Briefcase size={14} className="text-slate-400" />
+                                      <span className="text-slate-600">{employee.department}</span>
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
                       ) : (
                         <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 text-center">
+                          <Users size={24} className="mx-auto text-slate-300 mb-2" />
                           <p className="text-slate-500">No assignees</p>
                         </div>
                       )}
                     </div>
 
-                    <div className="space-y-3">
+                    {/* Reporters with Full Information */}
+                    <div className="space-y-4">
                       <h4 className="text-sm font-bold text-slate-700 flex items-center gap-2">
                         <User size={16} />
-                        Reporters
+                        Reporters ({getTaskReporters(viewTask).length})
                       </h4>
-                      {getTaskReporterDisplay(viewTask).length > 0 ? (
-                        <div className="space-y-2">
-                          {getTaskReporterDisplay(viewTask).map((name, index) => (
-                            <div key={index} className="flex items-center gap-3 p-3 bg-white rounded-xl border border-slate-200">
-                              <div className="w-8 h-8 bg-slate-300 rounded-full flex items-center justify-center text-sm font-bold">
-                                {name.charAt(0)}
+                      {getTaskReporters(viewTask).length > 0 ? (
+                        <div className="space-y-3">
+                          {getTaskReporters(viewTask).map((reporter, index) => {
+                            const employee = getEmployeeById(reporter._id) || reporter;
+                            return (
+                              <div key={reporter._id || index} className="p-4 bg-white rounded-xl border border-slate-200">
+                                <div className="flex items-center gap-3 mb-3">
+                                  <div className="w-12 h-12 bg-green-100 rounded-full flex items-center justify-center text-lg font-bold text-green-600">
+                                    {employee.name.charAt(0)}
+                                  </div>
+                                  <div className="flex-1">
+                                    <div className="font-bold text-slate-800">{employee.name}</div>
+                                    <div className="text-xs text-slate-500">{employee.role || "Employee"}</div>
+                                  </div>
+                                </div>
+                                <div className="space-y-2 text-sm">
+                                  {employee.email && (
+                                    <div className="flex items-center gap-2">
+                                      <Mail size={14} className="text-slate-400" />
+                                      <span className="text-slate-600">{employee.email}</span>
+                                    </div>
+                                  )}
+                                </div>
                               </div>
-                              <span className="font-bold">{name}</span>
-                            </div>
-                          ))}
+                            );
+                          })}
                         </div>
                       ) : (
                         <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 text-center">
+                          <User size={24} className="mx-auto text-slate-300 mb-2" />
                           <p className="text-slate-500">No reporters</p>
                         </div>
                       )}
                     </div>
-                  </div>
 
-                  {/* Labels */}
-                  {viewTask.labels && viewTask.labels.length > 0 && (
-                    <div className="space-y-3">
-                      <h4 className="text-sm font-bold text-slate-700 flex items-center gap-2">
-                        <Tag size={16} />
-                        Labels
-                      </h4>
-                      <div className="flex flex-wrap gap-2">
-                        {viewTask.labels.map((label, index) => (
-                          <div key={index} className="px-3 py-1.5 bg-slate-100 text-slate-700 text-xs font-bold rounded-full border border-slate-300 flex items-center gap-1">
-                            <Tag size={12} />
-                            {label}
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Epic Link */}
-                  <div className="space-y-3">
-                    <h4 className="text-sm font-bold text-slate-700 flex items-center gap-2">
-                      <Target size={16} />
-                      Epic
-                    </h4>
-                    <div className="p-4 bg-[#3fa87d]/10 rounded-xl border border-[#3fa87d]/20">
-                      <div className="flex items-center gap-3">
-                        <Target size={20} className="text-[#3fa87d]" />
-                        <div>
-                          <div className="font-bold text-slate-800">{selectedEpic.name}</div>
-                          <div className="text-sm text-slate-600">{selectedEpic.epicId}</div>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Project Info */}
-                  <div className="space-y-3">
-                    <h4 className="text-sm font-bold text-slate-700 flex items-center gap-2">
-                      <FileText size={16} />
-                      Project
-                    </h4>
-                    <div className="p-4 bg-slate-50 rounded-xl border border-slate-200">
+                    {/* Subtasks Section - SCROLLABLE */}
+                    <div className="space-y-4">
                       <div className="flex items-center justify-between">
-                        <div>
-                          <div className="font-bold text-slate-800">{selectedProject.name}</div>
-                          <div className="text-sm text-slate-600">{selectedProject.key}</div>
-                        </div>
+                        <h4 className="text-sm font-bold text-slate-700 flex items-center gap-2">
+                          <ListTree size={16} />
+                          Subtasks ({viewTask.subtasks?.length || 0})
+                        </h4>
+                        {viewTask.subtasks && viewTask.subtasks.length > 0 && (
+                          <span className="text-xs text-slate-500">
+                            {calculateSubtaskProgress(viewTask.subtasks).done} of {viewTask.subtasks.length} completed
+                          </span>
+                        )}
                       </div>
-                    </div>
-                  </div>
 
-                  {/* Comments Section */}
-                  <div className="space-y-3">
-                    <div className="flex items-center justify-between">
+                      {viewTask.subtasks && viewTask.subtasks.length > 0 ? (
+                        <>
+                          {/* Overall Progress Bar */}
+                          <div className="p-4 bg-slate-50 rounded-xl border border-slate-200">
+                            <div className="flex items-center justify-between mb-3">
+                              <div className="text-sm font-bold text-slate-700">Overall Progress</div>
+                              <div className="text-lg font-bold text-slate-800">{calculateSubtaskProgress(viewTask.subtasks).overallProgress}%</div>
+                            </div>
+                            <div className="w-full bg-slate-200 rounded-full h-3 mb-2">
+                              <div 
+                                className="bg-[#3fa87d] h-3 rounded-full transition-all duration-300"
+                                style={{ width: `${calculateSubtaskProgress(viewTask.subtasks).overallProgress}%` }}
+                              />
+                            </div>
+                            <div className="flex justify-between text-xs text-slate-600">
+                              <div className="flex items-center gap-1">
+                                <div className="w-3 h-3 bg-green-500 rounded-full"></div>
+                                <span>Done: {calculateSubtaskProgress(viewTask.subtasks).done}</span>
+                              </div>
+                              <div className="flex items-center gap-1">
+                                <div className="w-3 h-3 bg-blue-500 rounded-full"></div>
+                                <span>In Progress: {calculateSubtaskProgress(viewTask.subtasks).inProgress}</span>
+                              </div>
+                              <div className="flex items-center gap-1">
+                                <div className="w-3 h-3 bg-yellow-500 rounded-full"></div>
+                                <span>Todo: {calculateSubtaskProgress(viewTask.subtasks).todo}</span>
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Scrollable Subtasks List */}
+                          <div className="border border-slate-200 rounded-xl overflow-hidden max-h-[400px]">
+                            <div className="h-full overflow-y-auto p-2">
+                              <div className="space-y-2">
+                                {viewTask.subtasks.map((subtask) => (
+                                  <div key={subtask._id} className="p-4 bg-white rounded-xl border border-slate-200 hover:border-[#3fa87d]/50 transition-colors">
+                                    <div className="flex items-start justify-between mb-3">
+                                      <div className="flex-1">
+                                        <div className="flex items-center gap-2 mb-2">
+                                          {subtask.status === "Done" ? (
+                                            <CheckSquare size={16} className="text-green-500" />
+                                          ) : (
+                                            <Square size={16} className="text-slate-400" />
+                                          )}
+                                          <div className="font-bold text-slate-800">{subtask.title}</div>
+                                        </div>
+                                        {subtask.description && (
+                                          <p className="text-sm text-slate-600 mb-2">{subtask.description}</p>
+                                        )}
+                                        <div className="flex items-center gap-3">
+                                          <div className="flex items-center gap-1">
+                                            <User size={12} className="text-slate-400" />
+                                            <span className="text-xs text-slate-600">{subtask.assigneeName || "Unassigned"}</span>
+                                          </div>
+                                          <div className={`px-2 py-1 rounded-lg text-[10px] font-black flex items-center gap-1 ${getSubtaskStatusColor(subtask.status)}`}>
+                                            {getSubtaskStatusIcon(subtask.status)}
+                                            <span>{subtask.status}</span>
+                                          </div>
+                                        </div>
+                                      </div>
+                                      <div className="text-right">
+                                        <div className="text-sm font-bold text-slate-800">{subtask.progressPercentage}%</div>
+                                        <div className="text-xs text-slate-500">Progress</div>
+                                      </div>
+                                    </div>
+                                    
+                                    {/* Individual Subtask Progress Bar */}
+                                    <div className="w-full bg-slate-200 rounded-full h-2 mb-2">
+                                      <div 
+                                        className={`h-2 rounded-full ${
+                                          subtask.status === 'Done' ? 'bg-green-500' :
+                                          subtask.status === 'In Progress' ? 'bg-blue-500' :
+                                          'bg-yellow-500'
+                                        }`}
+                                        style={{ width: `${subtask.progressPercentage}%` }}
+                                      />
+                                    </div>
+                                    
+                                    <div className="flex justify-between text-[10px] text-slate-500">
+                                      <span>Created: {formatDate(subtask.createdAt)}</span>
+                                      <span>Updated: {formatDate(subtask.updatedAt)}</span>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          </div>
+                        </>
+                      ) : (
+                        <div className="p-6 bg-slate-50 rounded-xl border border-slate-200 text-center">
+                          <ListTree size={24} className="mx-auto text-slate-300 mb-2" />
+                          <p className="text-slate-500">No subtasks defined</p>
+                          <p className="text-xs text-slate-400 mt-1">Add subtasks to break down the work</p>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Comments Section */}
+                    <div className="space-y-4">
                       <h4 className="text-sm font-bold text-slate-700 flex items-center gap-2">
                         <MessageSquare size={16} />
                         Comments ({viewTask.comments?.length || 0})
                       </h4>
-                    </div>
-
-                    {/* Comments List */}
-                    {viewTask.comments && viewTask.comments.length > 0 ? (
-                      <div className="space-y-3 max-h-64 overflow-y-auto pr-2">
-                        {viewTask.comments.map((comment) => {
-                          const commentUser = employees.find(e => e._id === comment.userId);
-                          return (
-                            <div key={comment._id} className="p-4 bg-white rounded-xl border border-slate-200">
-                              <div className="flex items-center justify-between mb-3">
-                                <div className="flex items-center gap-3">
-                                  <div className="w-8 h-8 bg-slate-300 rounded-full flex items-center justify-center text-sm font-bold">
-                                    {commentUser?.name.charAt(0) || "U"}
-                                  </div>
-                                  <div>
-                                    <div className="font-bold">{comment.userName}</div>
-                                    <div className="text-xs text-slate-500">
-                                      {formatDate(comment.createdAt)}
+                      
+                      {viewTask.comments && viewTask.comments.length > 0 ? (
+                        <div className="space-y-3 max-h-48 overflow-y-auto pr-2">
+                          {viewTask.comments.map((comment) => {
+                            const commentUser = employees.find(e => e._id === comment.userId);
+                            return (
+                              <div key={comment._id} className="p-4 bg-white rounded-xl border border-slate-200">
+                                <div className="flex items-center justify-between mb-3">
+                                  <div className="flex items-center gap-3">
+                                    <div className="w-8 h-8 bg-slate-300 rounded-full flex items-center justify-center text-sm font-bold">
+                                      {commentUser?.name.charAt(0) || "U"}
+                                    </div>
+                                    <div>
+                                      <div className="font-bold">{comment.userName}</div>
+                                      <div className="text-xs text-slate-500">
+                                        {formatDateTime(comment.createdAt)}
+                                      </div>
                                     </div>
                                   </div>
                                 </div>
+                                <p className="text-slate-700">{comment.content}</p>
                               </div>
-                              <p className="text-slate-700">{comment.content}</p>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    ) : (
-                      <div className="p-6 bg-slate-50 rounded-xl border border-slate-200 text-center">
-                        <MessageSquare size={24} className="mx-auto text-slate-300 mb-2" />
-                        <p className="text-slate-500">No comments yet</p>
-                      </div>
-                    )}
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 text-center">
+                          <MessageSquare size={24} className="mx-auto text-slate-300 mb-2" />
+                          <p className="text-slate-500">No comments yet</p>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </div>
               </div>
@@ -1649,17 +1911,19 @@ export default function TasksManagement({
               {/* Modal Footer */}
               <div className="p-6 border-t border-slate-100 flex items-center justify-between">
                 <div className="text-xs text-slate-500">
-                  Created by: {viewTask.createdBy || "Unknown"}
+                  Created by: {viewTask.createdBy || "Unknown"} • Last updated: {formatDateTime(viewTask.updatedAt)}
                 </div>
-                <button
-                  onClick={() => {
-                    setIsViewMode(false);
-                    setViewTaskId(null);
-                  }}
-                  className="px-6 py-2 bg-slate-800 text-white text-sm font-bold rounded-xl hover:bg-slate-900 transition-colors"
-                >
-                  Close
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => {
+                      setIsViewMode(false);
+                      setViewTaskId(null);
+                    }}
+                    className="px-6 py-2 bg-slate-800 text-white text-sm font-bold rounded-xl hover:bg-slate-900 transition-colors"
+                  >
+                    Close
+                  </button>
+                </div>
               </div>
             </div>
           </div>

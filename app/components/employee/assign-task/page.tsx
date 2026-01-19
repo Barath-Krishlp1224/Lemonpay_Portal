@@ -14,7 +14,8 @@ import {
   RefreshCw,
   Trello,
   Shield,
-  Database
+  Database,
+  Play
 } from "lucide-react";
 import { toast, ToastContainer } from "react-toastify";
 import "react-toastify/dist/ReactToastify.css";
@@ -28,10 +29,45 @@ import { getAggregatedTaskData } from "./utils/aggregation";
 
 type Role = "Admin" | "Manager" | "TeamLead" | "Employee";
 
+// All task statuses matching the Mongoose model
 const allTaskStatuses = [
-  "Backlog", "To Do", "In Progress", "Dev Review", "Deployed in QA", 
-  "Test In Progress", "QA Sign Off", "Deployment Stage", 
-  "Pilot Test", "Completed", "Paused",
+  // Planning
+  "Icebox",
+  "Backlog",
+  "Prioritized",
+  
+  // Ready
+  "Todo",
+  "Ready for Dev",
+  
+  // Development
+  "In Progress",
+  "Dev Review",
+  "Code Review",
+  
+  // Testing
+  "QA Ready",
+  "QA In Progress",
+  "QA Review",
+  
+  // Review & Approval
+  "UAT",
+  "Client Review",
+  
+  // Release
+  "Ready for Release",
+  "Staging",
+  "Production",
+  "Live",
+  
+  // Completion
+  "Done",
+  "Closed",
+  
+  // Issues
+  "Blocked",
+  "On Hold",
+  "Rejected"
 ];
 
 const TasksPage: React.FC = () => {
@@ -103,6 +139,21 @@ const TasksPage: React.FC = () => {
         
         // Process tasks to ensure proper task name display and subtasks
         taskData = taskData.map(task => {
+          // Normalize task status
+          const normalizedStatus = (() => {
+            const status = task.status || 'Backlog';
+            const statusMap: Record<string, string> = {
+              'To Do': 'Todo',
+              'To do': 'Todo',
+              'todo': 'Todo',
+              'Completed': 'Done',
+              'completed': 'Done',
+              'Paused': 'Blocked',
+              'paused': 'Blocked',
+            };
+            return statusMap[status] || status;
+          })();
+          
           // Ensure subtasks is always an array and has proper structure
           let taskSubtasks: Subtask[] = [];
           if (task.subtasks && Array.isArray(task.subtasks)) {
@@ -121,6 +172,7 @@ const TasksPage: React.FC = () => {
           
           return {
             ...task,
+            status: normalizedStatus,
             subtasks: taskSubtasks,
             taskDisplayName: task.summary || task.title || task.name || `Task ${task.taskId || task._id?.substring(0, 8)}`,
             name: task.summary || task.title || task.name || `Task ${task.taskId || task._id?.substring(0, 8)}`
@@ -292,6 +344,22 @@ const TasksPage: React.FC = () => {
         }
       }
 
+      // Normalize the status for API
+      const normalizeStatus = (status: string): string => {
+        const statusMap: Record<string, string> = {
+          'To Do': 'Todo',
+          'To do': 'Todo',
+          'todo': 'Todo',
+          'Completed': 'Done',
+          'completed': 'Done',
+          'Paused': 'Blocked',
+          'paused': 'Blocked',
+        };
+        return statusMap[status] || status;
+      };
+
+      const normalizedStatus = normalizeStatus(newStatus);
+
       const res = await fetch(getApiUrl(`/api/tasks/${taskId}`), {
         method: "PUT",
         headers: { 
@@ -299,7 +367,7 @@ const TasksPage: React.FC = () => {
           ...getAuthHeaders()
         },
         body: JSON.stringify({ 
-          status: newStatus,
+          status: normalizedStatus,
           userId: currentUserId,
           userName: currentUserName,
           userRole: currentUserRole
@@ -411,6 +479,61 @@ const TasksPage: React.FC = () => {
     }
   }, [tasks, currentUserRole, currentUserName, currentUserId, fetchTasks]);
 
+  // Handle starting a sprint (move from Backlog/Icebox to Todo)
+  const handleStartSprint = useCallback(async (taskId: string) => {
+    try {
+      const task = tasks.find(t => t._id === taskId);
+      if (!task) {
+        toast.error("Task not found");
+        return;
+      }
+
+      // Check if task is in Icebox or Backlog
+      if (task.status !== "Icebox" && task.status !== "Backlog") {
+        toast.error("Only tasks in Icebox or Backlog can be started");
+        return;
+      }
+
+      // Check permission
+      if (currentUserRole === "Employee") {
+        const isAssigned = task.assigneeNames?.some(
+          name => name.toLowerCase() === currentUserName.toLowerCase()
+        ) || task.assigneeIds?.some(id => id === currentUserId);
+        
+        if (!isAssigned) {
+          toast.error("You are not authorized to start this task");
+          return;
+        }
+      }
+
+      const res = await fetch(getApiUrl(`/api/tasks/${taskId}`), {
+        method: "PUT",
+        headers: { 
+          "Content-Type": "application/json",
+          ...getAuthHeaders()
+        },
+        body: JSON.stringify({ 
+          status: "Todo", // Move to Todo when starting sprint
+          userId: currentUserId,
+          userName: currentUserName,
+          userRole: currentUserRole
+        }),
+      });
+      
+      if (res.ok) { 
+        await fetchTasks();
+        toast.success("Task started! Moved to Todo"); 
+      } else {
+        const errorData = await res.json();
+        console.error("Start sprint error:", errorData);
+        toast.error(errorData.error || "Failed to start task");
+      }
+    } catch (err) { 
+      console.error("Failed to start task:", err);
+      toast.error("Failed to start task"); 
+    }
+  }, [tasks, currentUserRole, currentUserName, currentUserId, fetchTasks]);
+
   // Fixed handleUpdate function
   const handleUpdate = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -441,6 +564,23 @@ const TasksPage: React.FC = () => {
         updatedAt: new Date().toISOString()
       };
       
+      // Normalize status if it's being updated
+      if (draftTask.status) {
+        const normalizeStatus = (status: string): string => {
+          const statusMap: Record<string, string> = {
+            'To Do': 'Todo',
+            'To do': 'Todo',
+            'todo': 'Todo',
+            'Completed': 'Done',
+            'completed': 'Done',
+            'Paused': 'Blocked',
+            'paused': 'Blocked',
+          };
+          return statusMap[status] || status;
+        };
+        requestBody.status = normalizeStatus(draftTask.status);
+      }
+      
       // CRITICAL: Always include subtasks, even if empty array
       if (subtasks && Array.isArray(subtasks)) {
         console.log('Including subtasks in request:', subtasks.length);
@@ -452,7 +592,7 @@ const TasksPage: React.FC = () => {
       }
       
       // Include fields from draftTask
-      const fieldsToInclude = ['status', 'completion', 'remarks', 'summary', 'assigneeNames', 'dueDate', 'description'];
+      const fieldsToInclude = ['completion', 'remarks', 'summary', 'assigneeNames', 'dueDate', 'description'];
       
       fieldsToInclude.forEach(field => {
         if (draftTask[field as keyof Task] !== undefined) {
@@ -472,7 +612,6 @@ const TasksPage: React.FC = () => {
       console.log("Sending update request for task:", selectedTaskForModal._id);
       console.log("Request body keys:", Object.keys(requestBody));
       console.log("Subtasks being sent:", requestBody.subtasks?.length || 0);
-      console.log("Full request body:", JSON.stringify(requestBody, null, 2));
       
       const res = await fetch(getApiUrl(`/api/tasks/${selectedTaskForModal._id}`), {
         method: "PUT",
@@ -607,7 +746,20 @@ const TasksPage: React.FC = () => {
     
     // Apply status filter
     if (statusFilter) {
-      base = base.filter(t => t.status === statusFilter);
+      const normalizedStatusFilter = (() => {
+        const statusMap: Record<string, string> = {
+          'To Do': 'Todo',
+          'To do': 'Todo',
+          'todo': 'Todo',
+          'Completed': 'Done',
+          'completed': 'Done',
+          'Paused': 'Blocked',
+          'paused': 'Blocked',
+        };
+        return statusMap[statusFilter] || statusFilter;
+      })();
+      
+      base = base.filter(t => t.status === normalizedStatusFilter);
     }
     
     return base;
@@ -627,11 +779,16 @@ const TasksPage: React.FC = () => {
       return assigneeMatches || assigneeIdMatches;
     });
     
+    // Updated to include all completion statuses
+    const completionStatuses = ["Done", "Completed", "Closed", "Live"];
+    const todoStatuses = ["Todo", "Backlog", "Icebox", "Prioritized", "Ready for Dev"];
+    const inProgressStatuses = ["In Progress", "Dev Review", "Code Review", "QA Ready", "QA In Progress", "QA Review", "UAT", "Client Review", "Ready for Release", "Staging"];
+    
     return {
       total: employeeTasks.length,
-      completed: employeeTasks.filter(t => t.status === "Completed").length,
-      inProgress: employeeTasks.filter(t => t.status === "In Progress").length,
-      todo: employeeTasks.filter(t => t.status === "To Do" || t.status === "Backlog").length,
+      completed: employeeTasks.filter(t => completionStatuses.includes(t.status)).length,
+      inProgress: employeeTasks.filter(t => inProgressStatuses.includes(t.status)).length,
+      todo: employeeTasks.filter(t => todoStatuses.includes(t.status)).length,
     };
   }, [filteredTasks, currentUserRole, currentUserName, currentUserId]);
 
@@ -658,49 +815,7 @@ const TasksPage: React.FC = () => {
     <div className="flex min-h-screen bg-[#F8FAFC]">
       <ToastContainer position="top-right" autoClose={2000} theme="dark" /> 
       
-      {/* Navigation with user role indicator */}
-      <nav className="fixed top-25 left-1/2 transform -translate-x-1/2 bg-white/90 backdrop-blur-2xl shadow-[0_25px_60px_-15px_rgba(0,0,0,0.15)] rounded-full px-8 py-4 flex items-center space-x-8 z-[100] border border-white/50">
-        <div className="flex items-center gap-2 px-4 py-2 rounded-full bg-blue-600 text-white shadow-lg">
-          <Kanban size={18} />
-          <span className="text-xs font-bold uppercase tracking-wider">Board View</span>
-        </div>
-
-        <div className="h-6 w-px bg-slate-200" />
-
-        <div className="relative flex items-center">
-          <Search className="absolute left-3 w-4 h-4 text-slate-400" />
-          <input 
-            type="text"
-            placeholder="Search tasks..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            className="pl-10 pr-4 py-2 bg-slate-100 placeholder-gray-600 rounded-full text-xs font-medium focus:outline-none focus:ring-2 focus:ring-blue-500/20 w-48 transition-all"
-          />
-        </div>
-        <div className="relative flex items-center">
-          <Filter className="absolute left-3 w-4 h-4 text-slate-400" />
-          <select 
-            value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value)}
-            
-            className="pl-10 pr-8 py-2 bg-slate-100 text-slate-600 rounded-full text-xs font-medium focus:outline-none focus:ring-2 focus:ring-blue-500/20 w-36 transition-all appearance-none cursor-pointer"
-          >
-            <option value="" className="text-slate-500">All Status</option>
-            <option value="To Do" className="text-slate-700">To Do</option>
-            <option value="In Progress" className="text-slate-700">In Progress</option>
-            <option value="Completed" className="text-slate-700">Completed</option>
-            <option value="Paused" className="text-slate-700">Paused</option>
-          </select>
-          {/* Optional: Chevron icon since appearance-none hides the default one */}
-          <div className="absolute right-3 pointer-events-none">
-            <svg className="w-3 h-3 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" />
-            </svg>
-          </div>
-        </div>
-
-       
-      </nav>
+     
 
       <main className="flex-1 min-h-screen pb-20 px-4 sm:px-6 lg:px-8 pt-44 w-full">
         <div className="mx-auto w-full max-w-none px-4">
@@ -818,7 +933,7 @@ const TasksPage: React.FC = () => {
               </div>
             )}
 
-            {selectedTaskForModal && (
+                      {selectedTaskForModal && (
               <TaskModal 
                 task={selectedTaskForModal} 
                 isOpen={isModalOpen} 
@@ -828,18 +943,17 @@ const TasksPage: React.FC = () => {
                 subtasks={subtasks} 
                 employees={employees} 
                 currentProjectPrefix={currentProjectPrefix} 
-                allTaskStatuses={allTaskStatuses}
+                // REMOVED: allTaskStatuses={allTaskStatuses} // This prop no longer exists
                 handleEdit={() => setIsEditing(true)} 
                 handleDelete={handleDelete} 
                 handleUpdate={handleUpdate} 
-                handleStartSprint={() => {}} 
+                handleStartSprint={handleStartSprint} 
                 cancelEdit={() => setIsEditing(false)} 
                 handleDraftChange={(e) => {
                   const { name, value } = e.target;
                   setDraftTask(prev => ({ ...prev, [name]: value }));
                 }} 
                 handleSubtaskChange={(path, field, val) => setSubtasks(prev => updateSubtaskState(prev, path, (s) => ({ ...s, [field]: val })))} 
-                
                 addSubtask={(path) => setSubtasks(prev => updateSubtaskState(prev, path, () => null, 'add'))} 
                 removeSubtask={(path) => setSubtasks(prev => updateSubtaskState(prev, path, () => null, 'remove'))} 
                 onToggleEdit={(path) => setSubtasks(prev => updateSubtaskState(prev, path, (s) => ({ ...s, isEditing: !s.isEditing })))} 

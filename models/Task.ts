@@ -22,7 +22,7 @@ export interface ITask extends Document {
   summary: string;
   description?: string;
   issueType: 'Story' | 'Task' | 'Bug';
-  status: 'Backlog' | 'Todo' | 'In Progress' | 'Review' | 'Done' | 'Blocked';
+  status: string; // Changed from specific enum to string to accommodate all statuses
   priority: 'Lowest' | 'Low' | 'Medium' | 'High' | 'Highest';
   assigneeIds: string[];
   reporterIds: string[];
@@ -54,7 +54,54 @@ export interface ITask extends Document {
   taskTimeSpent?: string;
   taskStoryPoints?: number;
   sprintId?: string;
+  displayName?: string;
+  name?: string;
+  title?: string;
 }
+
+// Define all possible task statuses
+const TASK_STATUSES = [
+  // Planning
+  'Icebox',
+  'Backlog',
+  'Prioritized',
+  
+  // Ready
+  'Todo',
+  'To Do', // Keep both for compatibility
+  'Ready for Dev',
+  
+  // Development
+  'In Progress',
+  'Dev Review',
+  'Code Review',
+  
+  // Testing
+  'QA Ready',
+  'QA In Progress',
+  'QA Review',
+  
+  // Review & Approval
+  'UAT',
+  'Client Review',
+  
+  // Release
+  'Ready for Release',
+  'Staging',
+  'Production',
+  'Live',
+  
+  // Completion
+  'Done',
+  'Completed', // Keep both for compatibility
+  'Closed',
+  
+  // Issues
+  'Blocked',
+  'On Hold',
+  'Rejected',
+  'Paused'
+] as const;
 
 const SubtaskSchema: Schema = new Schema({
   id: {
@@ -133,7 +180,7 @@ const TaskSchema: Schema = new Schema({
   },
   status: {
     type: String,
-    enum: ['Backlog', 'Todo', 'In Progress', 'Review', 'Done', 'Blocked'],
+    enum: TASK_STATUSES,
     default: 'Backlog'
   },
   priority: {
@@ -255,6 +302,18 @@ const TaskSchema: Schema = new Schema({
   },
   sprintId: {
     type: String
+  },
+  displayName: {
+    type: String,
+    trim: true
+  },
+  name: {
+    type: String,
+    trim: true
+  },
+  title: {
+    type: String,
+    trim: true
   }
 }, {
   timestamps: true

@@ -22,14 +22,30 @@ interface TaskBoardViewProps {
     visibleRows?: number;         // New: Visible rows per column
 }
 
+// Extended status columns with more workflow states
 const statusColumns = [
+    { title: "Icebox", status: "Icebox", color: "text-gray-400" },
     { title: "Backlog", status: "Backlog", color: "text-slate-400" },
+    { title: "Prioritized", status: "Prioritized", color: "text-blue-400" },
     { title: "To Do", status: "To Do", color: "text-blue-500" },
+    { title: "Ready for Dev", status: "Ready for Dev", color: "text-cyan-500" },
     { title: "In Progress", status: "In Progress", color: "text-amber-500" },
     { title: "Dev Review", status: "Dev Review", color: "text-purple-500" },
-    { title: "QA / Testing", status: "Deployed in QA", color: "text-pink-500" },
-    { title: "Sign Off", status: "QA Sign Off", color: "text-indigo-500" },
-    { title: "Done", status: "Completed", color: "text-emerald-500" },
+    { title: "Code Review", status: "Code Review", color: "text-violet-500" },
+    { title: "QA Ready", status: "QA Ready", color: "text-fuchsia-500" },
+    { title: "QA In Progress", status: "QA In Progress", color: "text-pink-500" },
+    { title: "QA Review", status: "QA Review", color: "text-rose-500" },
+    { title: "UAT", status: "UAT", color: "text-indigo-500" },
+    { title: "Client Review", status: "Client Review", color: "text-indigo-600" },
+    { title: "Ready for Release", status: "Ready for Release", color: "text-teal-500" },
+    { title: "Staging", status: "Staging", color: "text-orange-500" },
+    { title: "Production", status: "Production", color: "text-green-500" },
+    { title: "Live", status: "Live", color: "text-emerald-500" },
+    { title: "Done", status: "Done", color: "text-emerald-600" },
+    { title: "Closed", status: "Closed", color: "text-gray-500" },
+    { title: "Blocked", status: "Blocked", color: "text-red-500" },
+    { title: "On Hold", status: "On Hold", color: "text-yellow-600" },
+    { title: "Rejected", status: "Rejected", color: "text-red-600" },
 ];
 
 const getProgressGradient = (completion: number) => {
@@ -239,8 +255,8 @@ const TaskBoardView: React.FC<TaskBoardViewProps> = ({
     currentUserRole = "Employee",
     currentUserName = "",
     currentUserId = "",
-    containerHeight = "70vh",      // Default container height
-    columnMaxHeight = "60vh",      // Default column max height
+    containerHeight = "75vh",      // Slightly increased for more columns
+    columnMaxHeight = "65vh",      // Slightly increased
     visibleRows = 2                // Default visible rows
 }) => {
     // State to track which columns are expanded
@@ -252,21 +268,51 @@ const TaskBoardView: React.FC<TaskBoardViewProps> = ({
             let status = task.status || 'Backlog';
             
             // Map similar statuses to standard columns
-            if (status === 'Test In Progress' || status === 'Deployed in QA') {
-                status = 'Deployed in QA';
-            }
-            if (status === 'QA Sign Off' || status === 'Deployment Stage' || status === 'Pilot Test') {
-                status = 'QA Sign Off';
-            }
-            if (status === 'Completed' || status === 'Done') {
-                status = 'Completed';
-            }
-            if (status === 'To Do' || status === 'Todo') {
-                status = 'To Do';
-            }
+            const statusMap: Record<string, string> = {
+                'Icebox': 'Icebox',
+                'Backlog': 'Backlog',
+                'Prioritized': 'Prioritized',
+                'Todo': 'To Do',
+                'To Do': 'To Do',
+                'Ready for Dev': 'Ready for Dev',
+                'Ready': 'Ready for Dev',
+                'In Progress': 'In Progress',
+                'InDevelopment': 'In Progress',
+                'Development': 'In Progress',
+                'Dev Review': 'Dev Review',
+                'Code Review': 'Code Review',
+                'QA Ready': 'QA Ready',
+                'QA In Progress': 'QA In Progress',
+                'QA / Testing': 'QA In Progress',
+                'Testing': 'QA In Progress',
+                'Test In Progress': 'QA In Progress',
+                'QA Review': 'QA Review',
+                'UAT': 'UAT',
+                'User Acceptance': 'UAT',
+                'Client Review': 'Client Review',
+                'Ready for Release': 'Ready for Release',
+                'Staging': 'Staging',
+                'Production': 'Production',
+                'Live': 'Live',
+                'Completed': 'Done',
+                'Done': 'Done',
+                'Closed': 'Closed',
+                'Blocked': 'Blocked',
+                'On Hold': 'On Hold',
+                'Rejected': 'Rejected',
+                'Deployment Stage': 'Staging',
+                'Pilot Test': 'UAT',
+                'Deployed in QA': 'QA In Progress',
+                'QA Sign Off': 'QA Review'
+            };
             
-            if (!acc[status]) acc[status] = [];
-            acc[status].push(task);
+            const mappedStatus = statusMap[status] || status;
+            
+            // Only include statuses that exist in our columns
+            if (statusColumns.find(col => col.status === mappedStatus)) {
+                if (!acc[mappedStatus]) acc[mappedStatus] = [];
+                acc[mappedStatus].push(task);
+            }
             return acc;
         }, {} as { [key: string]: Task[] });
     }, [tasks]);
@@ -317,11 +363,13 @@ const TaskBoardView: React.FC<TaskBoardViewProps> = ({
 
     return (
         <div 
-            className="w-full overflow-x-auto"
+            className="w-full overflow-x-auto custom-scrollbar"
             style={{ height: containerHeight }}
         >
+            <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-transparent via-blue-500/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
+            
             <DragDropContext onDragEnd={onDragEnd}>
-                <div className="flex gap-8 pb-10 px-4 custom-scrollbar min-w-max h-full">
+                <div className="flex gap-8 pb-10 px-6 custom-scrollbar min-w-max h-full">
                     {statusColumns.map((column) => {
                         const columnTasks = tasksByStatus[column.status] || [];
                         const visibleTasks = getVisibleTasks(column.status);
@@ -332,11 +380,11 @@ const TaskBoardView: React.FC<TaskBoardViewProps> = ({
                             <div key={column.status} className="flex-shrink-0 w-[340px] flex flex-col h-full">
                                 
                                 {/* Column Header */}
-                                <div className="flex items-center justify-between px-6 py-4 mb-4 bg-white/80 backdrop-blur-sm sticky top-0 z-10 rounded-[2rem] shadow-sm">
+                                <div className="flex items-center justify-between px-6 py-4 mb-4 bg-white/80 backdrop-blur-sm sticky top-0 z-10 rounded-[2rem] shadow-sm border border-slate-100">
                                     <div className="flex items-center gap-3">
-                                        <div className={`w-3 h-3 rounded-full ${column.color.replace('text', 'bg')} shadow-sm`} />
+                                        <div className={`w-3 h-3 rounded-full ${column.color.replace('text', 'bg')} shadow-sm ring-2 ring-white`} />
                                         <div>
-                                            <h3 className="font-black text-[11px] uppercase tracking-[0.2em] text-slate-800">
+                                            <h3 className="font-black text-[11px] uppercase tracking-[0.15em] text-slate-800">
                                                 {column.title}
                                             </h3>
                                             {columnTasks.length > 0 && (
@@ -350,22 +398,22 @@ const TaskBoardView: React.FC<TaskBoardViewProps> = ({
                                         {hasMoreTasks && (
                                             <button 
                                                 onClick={() => toggleColumnExpansion(column.status)}
-                                                className="flex items-center gap-1 text-xs text-slate-500 hover:text-blue-600"
+                                                className="flex items-center gap-1 text-xs text-slate-500 hover:text-blue-600 transition-colors px-2 py-1 rounded-full hover:bg-slate-100"
                                             >
                                                 {isExpanded ? (
                                                     <>
                                                         <ChevronUp size={14} />
-                                                        Show Less
+                                                        <span className="text-[10px] font-medium">Less</span>
                                                     </>
                                                 ) : (
                                                     <>
                                                         <ChevronDown size={14} />
-                                                        Show More ({columnTasks.length - visibleRows})
+                                                        <span className="text-[10px] font-medium">+{columnTasks.length - visibleRows}</span>
                                                     </>
                                                 )}
                                             </button>
                                         )}
-                                        <span className="bg-white border border-slate-100 px-3 py-1 rounded-full text-[10px] font-black text-slate-500 shadow-sm">
+                                        <span className="bg-white border border-slate-100 px-3 py-1 rounded-full text-[10px] font-black text-slate-500 shadow-sm min-w-[2rem] text-center">
                                             {columnTasks.length}
                                         </span>
                                     </div>
@@ -379,7 +427,7 @@ const TaskBoardView: React.FC<TaskBoardViewProps> = ({
                                             {...provided.droppableProps}
                                             className={`flex-1 space-y-3 p-3 rounded-[3rem] transition-all duration-300 
                                                 ${snapshot.isDraggingOver ? 'bg-blue-50/50 ring-2 ring-blue-500/10 ring-inset' : 'bg-slate-50/30'}
-                                                overflow-y-auto`}
+                                                overflow-y-auto custom-scrollbar-thin border border-slate-100/50`}
                                             style={{ maxHeight: columnMaxHeight }}
                                         >
                                             {visibleTasks.map((task, index) => (
@@ -397,7 +445,7 @@ const TaskBoardView: React.FC<TaskBoardViewProps> = ({
                                             {provided.placeholder}
 
                                             {columnTasks.length === 0 && (
-                                                <div className="flex flex-col items-center justify-center py-20 border-2 border-dashed border-slate-200 rounded-[3rem] opacity-40 hover:opacity-60 transition-opacity">
+                                                <div className="flex flex-col items-center justify-center py-20 border-2 border-dashed border-slate-200 rounded-[3rem] opacity-40 hover:opacity-60 transition-opacity bg-white/50">
                                                     <AlertCircle size={24} className="text-slate-300 mb-2" />
                                                     <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">No tasks</p>
                                                     <p className="text-[9px] text-slate-400 mt-1">Drop tasks here</p>
@@ -406,10 +454,12 @@ const TaskBoardView: React.FC<TaskBoardViewProps> = ({
 
                                             {/* Show More indicator */}
                                             {!isExpanded && hasMoreTasks && (
-                                                <div className="pt-4 border-t border-slate-200">
-                                                    <div className="flex items-center justify-center text-slate-400 text-xs font-medium">
+                                                <div className="pt-4 border-t border-slate-200/50">
+                                                    <div className="flex items-center justify-center text-slate-400 text-xs font-medium py-2">
                                                         <ChevronDown size={16} className="mr-1" />
-                                                        {columnTasks.length - visibleRows} more tasks
+                                                        <span className="text-[10px]">
+                                                            {columnTasks.length - visibleRows} more task{columnTasks.length - visibleRows !== 1 ? 's' : ''}
+                                                        </span>
                                                     </div>
                                                 </div>
                                             )}
@@ -421,6 +471,35 @@ const TaskBoardView: React.FC<TaskBoardViewProps> = ({
                     })}
                 </div>
             </DragDropContext>
+            
+            {/* Add CSS for custom scrollbar */}
+            <style jsx>{`
+                .custom-scrollbar::-webkit-scrollbar {
+                    height: 8px;
+                    width: 8px;
+                }
+                .custom-scrollbar::-webkit-scrollbar-track {
+                    background: #f1f5f9;
+                    border-radius: 10px;
+                }
+                .custom-scrollbar::-webkit-scrollbar-thumb {
+                    background: #cbd5e1;
+                    border-radius: 10px;
+                }
+                .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+                    background: #94a3b8;
+                }
+                .custom-scrollbar-thin::-webkit-scrollbar {
+                    width: 4px;
+                }
+                .custom-scrollbar-thin::-webkit-scrollbar-track {
+                    background: transparent;
+                }
+                .custom-scrollbar-thin::-webkit-scrollbar-thumb {
+                    background: #e2e8f0;
+                    border-radius: 10px;
+                }
+            `}</style>
         </div>
     );
 };

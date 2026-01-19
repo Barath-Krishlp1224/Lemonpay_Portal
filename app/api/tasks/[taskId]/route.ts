@@ -40,20 +40,38 @@ const normalizeStatus = (status: string): string => {
     'In progress': 'In Progress',
     'In-Progress': 'In Progress',
     'InProgress': 'In Progress',
-    // Map other statuses
-    'Review': 'Review',
-    'review': 'Review',
+    // Map completion variations
     'Done': 'Done',
     'done': 'Done',
     'Completed': 'Done',
     'completed': 'Done',
+    // Map other statuses
     'Backlog': 'Backlog',
     'backlog': 'Backlog',
     'Blocked': 'Blocked',
     'blocked': 'Blocked',
     'Paused': 'Blocked',
-    'paused': 'Blocked'
+    'paused': 'Blocked',
+    // Map new statuses (keep as is since they're in the enum)
+    'Icebox': 'Icebox',
+    'Prioritized': 'Prioritized',
+    'Ready for Dev': 'Ready for Dev',
+    'Dev Review': 'Dev Review',
+    'Code Review': 'Code Review',
+    'QA Ready': 'QA Ready',
+    'QA In Progress': 'QA In Progress',
+    'QA Review': 'QA Review',
+    'UAT': 'UAT',
+    'Client Review': 'Client Review',
+    'Ready for Release': 'Ready for Release',
+    'Staging': 'Staging',
+    'Production': 'Production',
+    'Live': 'Live',
+    'Closed': 'Closed',
+    'On Hold': 'On Hold',
+    'Rejected': 'Rejected'
   };
+  
   return statusMap[status] || status;
 };
 

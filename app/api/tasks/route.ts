@@ -3,6 +3,56 @@ import { connectDB } from '@/lib/mongodb';
 import Task from '@/models/Task';
 import mongoose from 'mongoose';
 
+// Function to normalize status values to match schema enum
+const normalizeStatus = (status: string): string => {
+  const statusMap: Record<string, string> = {
+    // Map 'To Do' variations to 'Todo'
+    'To Do': 'Todo',
+    'To do': 'Todo',
+    'to do': 'Todo',
+    'todo': 'Todo',
+    'To-Do': 'Todo',
+    // Map 'In Progress' variations
+    'In Progress': 'In Progress',
+    'in progress': 'In Progress',
+    'In progress': 'In Progress',
+    'In-Progress': 'In Progress',
+    'InProgress': 'In Progress',
+    // Map completion variations
+    'Done': 'Done',
+    'done': 'Done',
+    'Completed': 'Done',
+    'completed': 'Done',
+    // Map other statuses
+    'Backlog': 'Backlog',
+    'backlog': 'Backlog',
+    'Blocked': 'Blocked',
+    'blocked': 'Blocked',
+    'Paused': 'Blocked',
+    'paused': 'Blocked',
+    // Map new statuses (keep as is since they're in the enum)
+    'Icebox': 'Icebox',
+    'Prioritized': 'Prioritized',
+    'Ready for Dev': 'Ready for Dev',
+    'Dev Review': 'Dev Review',
+    'Code Review': 'Code Review',
+    'QA Ready': 'QA Ready',
+    'QA In Progress': 'QA In Progress',
+    'QA Review': 'QA Review',
+    'UAT': 'UAT',
+    'Client Review': 'Client Review',
+    'Ready for Release': 'Ready for Release',
+    'Staging': 'Staging',
+    'Production': 'Production',
+    'Live': 'Live',
+    'Closed': 'Closed',
+    'On Hold': 'On Hold',
+    'Rejected': 'Rejected'
+  };
+  
+  return statusMap[status] || status;
+};
+
 // GET all tasks across all projects
 export async function GET(request: NextRequest) {
   try {
@@ -109,7 +159,7 @@ export async function POST(request: NextRequest) {
       summary: body.summary,
       description: body.description || '',
       issueType: body.issueType,
-      status: body.status || 'Backlog',
+      status: normalizeStatus(body.status || 'Backlog'), // Normalize status here
       priority: body.priority || 'Medium',
       
       // IDs
@@ -259,6 +309,11 @@ export async function PUT(request: NextRequest) {
     }
     
     let updateData: any = { ...body };
+    
+    // Normalize status if it's being updated
+    if (body.status && typeof body.status === 'string') {
+      updateData.status = normalizeStatus(body.status);
+    }
     
     // Ensure consistency between IDs and names
     if (body.assigneeIds && Array.isArray(body.assigneeIds)) {

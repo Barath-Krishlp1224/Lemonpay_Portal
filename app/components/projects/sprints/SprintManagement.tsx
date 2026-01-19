@@ -5,10 +5,14 @@ import {
   Target, Calendar, Users, Clock, PlayCircle, 
   CheckCircle, Archive, TrendingUp, AlertCircle,
   ChevronRight, X, Edit2, Trash2, Loader2, FolderOpen,
-  FolderKanban, ChevronDown, Plus
+  FolderKanban, ChevronDown, Plus, RefreshCw,
+  Eye, ExternalLink, GitBranch, BarChart3, 
+  CheckSquare, Square, ListTree, Rocket, Zap,
+  FileText, User, Mail, Briefcase, Tag
 } from "lucide-react";
 import type { SavedProject, Sprint, Employee } from "@/app/types/project";
 import SprintCreationModal from "./SprintCreationModal";
+import SprintViewEditModal from "./SprintViewEditModal"; // We'll create this component
 
 // Update the interface to include projects and onProjectSelect
 interface SprintManagementProps {
@@ -16,6 +20,19 @@ interface SprintManagementProps {
   employees: Employee[];
   projects: SavedProject[];
   onProjectSelect: (project: SavedProject) => void;
+}
+
+interface Task {
+  _id: string;
+  summary: string;
+  description: string;
+  status: string;
+  priority: string;
+  assigneeIds: string[];
+  storyPoints: number;
+  issueType: string;
+  issueKey: string;
+  assigneeNames?: string[];
 }
 
 export default function SprintManagement({ 
@@ -32,6 +49,11 @@ export default function SprintManagement({
   const [showProjectsDropdown, setShowProjectsDropdown] = useState(false);
   const [previousSprints, setPreviousSprints] = useState<Sprint[]>([]);
   const [expandedSprint, setExpandedSprint] = useState<string | null>(null);
+  const [refreshingBacklog, setRefreshingBacklog] = useState(false);
+  const [viewEditSprint, setViewEditSprint] = useState<Sprint | null>(null);
+  const [showViewEditModal, setShowViewEditModal] = useState(false);
+  const [editingSprint, setEditingSprint] = useState<Sprint | null>(null);
+  
 
   // Fetch sprints when project changes
   useEffect(() => {
@@ -51,7 +73,7 @@ export default function SprintManagement({
     
     setLoading(true);
     try {
-      const response = await fetch(`/api/sprints?projectId=${selectedProject._id}`);
+      const response = await fetch(`/api/sprints?projectId=${selectedProject._id}&includeTasks=true`);
       if (!response.ok) {
         throw new Error(`Failed to fetch sprints: ${response.status}`);
       }
@@ -70,7 +92,7 @@ export default function SprintManagement({
     if (!selectedProject?._id) return;
     
     try {
-      const response = await fetch(`/api/sprints?projectId=${selectedProject._id}&status=Active`);
+      const response = await fetch(`/api/sprints?projectId=${selectedProject._id}&status=Active&includeTasks=true`);
       if (response.ok) {
         const data = await response.json();
         const activeSprints = data.data || data.sprints || [];
@@ -85,7 +107,7 @@ export default function SprintManagement({
     if (!selectedProject?._id) return;
     
     try {
-      const response = await fetch(`/api/sprints?projectId=${selectedProject._id}&status=Completed`);
+      const response = await fetch(`/api/sprints?projectId=${selectedProject._id}&status=Completed&includeTasks=true`);
       if (response.ok) {
         const data = await response.json();
         const completedSprints = data.data || data.sprints || [];
@@ -93,6 +115,29 @@ export default function SprintManagement({
       }
     } catch (err) {
       console.error("Failed to fetch previous sprints:", err);
+    }
+  };
+
+  // Refresh backlog data manually
+  const refreshBacklogData = async () => {
+    if (!selectedProject?._id) return;
+    
+    setRefreshingBacklog(true);
+    try {
+      const response = await fetch(`/api/sprints/refresh-backlog?projectId=${selectedProject._id}`, {
+        method: "POST",
+      });
+      
+      if (response.ok) {
+        setMessage("✅ Backlog data refreshed!");
+        setTimeout(() => setMessage(""), 3000);
+      }
+    } catch (err) {
+      console.error("Failed to refresh backlog:", err);
+      setMessage("❌ Failed to refresh backlog data");
+      setTimeout(() => setMessage(""), 3000);
+    } finally {
+      setRefreshingBacklog(false);
     }
   };
 
@@ -188,6 +233,56 @@ export default function SprintManagement({
     setTimeout(() => setMessage(""), 3000);
   };
 
+const handleViewSprint = async (sprintId: string) => {
+  try {
+    const response = await fetch(`/api/sprints/${sprintId}?includeTasks=true`);
+    if (response.ok) {
+      const data = await response.json();
+      setViewEditSprint(data.data);
+      setEditingSprint(null); // Start in view mode
+      setShowViewEditModal(true);
+    }
+  } catch (err) {
+    console.error("Failed to fetch sprint details:", err);
+    setMessage("❌ Failed to load sprint details");
+    setTimeout(() => setMessage(""), 3000);
+  }
+};
+
+ const handleEditSprint = async (sprintId: string) => {
+  try {
+    const response = await fetch(`/api/sprints/${sprintId}?includeTasks=true`);
+    if (response.ok) {
+      const data = await response.json();
+      setViewEditSprint(data.data);
+      setEditingSprint(data.data); // Start in edit mode
+      setShowViewEditModal(true);
+    }
+  } catch (err) {
+    console.error("Failed to fetch sprint details:", err);
+    setMessage("❌ Failed to load sprint details");
+    setTimeout(() => setMessage(""), 3000);
+  }
+};
+
+  const handleSprintUpdated = (updatedSprint: Sprint) => {
+    // Update sprints list
+    setSprints(prev => prev.map(s => 
+      s._id === updatedSprint._id ? updatedSprint : s
+    ));
+    
+    // Update active sprint if needed
+    if (activeSprint?._id === updatedSprint._id) {
+      setActiveSprint(updatedSprint);
+    }
+    
+    setShowViewEditModal(false);
+    setViewEditSprint(null);
+    setEditingSprint(null);
+    setMessage("✅ Sprint updated successfully!");
+    setTimeout(() => setMessage(""), 3000);
+  };
+
   // Calculate sprint metrics
   const calculateSprintMetrics = (sprint: Sprint) => {
     const tasksArray = Array.isArray(sprint.tasks) ? sprint.tasks : [];
@@ -207,9 +302,38 @@ export default function SprintManagement({
     const carriedOverPoints = (sprint as any).carriedOverPoints || 0;
     const totalAdjustedPoints = totalPoints + carriedOverPoints;
 
+    // Calculate task status breakdown
+    const todoTasks = tasksWithDetails.filter((task: any) => 
+      task.status === "To Do" || task.status === "Todo"
+    ).length;
+    
+    const inProgressTasks = tasksWithDetails.filter((task: any) => 
+      task.status === "In Progress"
+    ).length;
+    
+    const reviewTasks = tasksWithDetails.filter((task: any) => 
+      task.status === "Review"
+    ).length;
+    
+    const doneTasks = completedTasks;
+
+    // Calculate assignee distribution
+    const assigneeDistribution: Record<string, number> = {};
+    tasksWithDetails.forEach((task: any) => {
+      if (task.assigneeNames && Array.isArray(task.assigneeNames)) {
+        task.assigneeNames.forEach((assignee: string) => {
+          assigneeDistribution[assignee] = (assigneeDistribution[assignee] || 0) + 1;
+        });
+      }
+    });
+
     return {
       totalTasks,
       completedTasks,
+      todoTasks,
+      inProgressTasks,
+      reviewTasks,
+      doneTasks,
       totalPoints,
       completedPoints,
       carriedOverPoints,
@@ -217,6 +341,7 @@ export default function SprintManagement({
       remainingPoints: totalAdjustedPoints - completedPoints,
       progressPercentage: totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0,
       pointsProgressPercentage: totalAdjustedPoints > 0 ? Math.round((completedPoints / totalAdjustedPoints) * 100) : 0,
+      assigneeDistribution
     };
   };
 
@@ -282,6 +407,20 @@ export default function SprintManagement({
     setExpandedSprint(expandedSprint === sprintId ? null : sprintId);
   };
 
+  // Format duration
+  const formatDuration = (startDate: string | Date, endDate: string | Date) => {
+    if (!startDate || !endDate) return "N/A";
+    try {
+      const start = typeof startDate === 'string' ? new Date(startDate) : startDate;
+      const end = typeof endDate === 'string' ? new Date(endDate) : endDate;
+      const diffTime = Math.abs(end.getTime() - start.getTime());
+      const days = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+      return `${days} days`;
+    } catch {
+      return "N/A";
+    }
+  };
+
   return (
     <div className="bg-white rounded-3xl border-2 border-slate-200 shadow-xl p-6 h-full flex flex-col">
       {/* Header with Project Selection */}
@@ -293,7 +432,7 @@ export default function SprintManagement({
             </div>
             <div className="flex-1">
               <h2 className="text-lg font-bold text-slate-800">Sprint Management</h2>
-              <div className="relative">
+              <div className="flex items-center gap-2">
                 <button
                   onClick={() => setShowProjectsDropdown(!showProjectsDropdown)}
                   className="flex items-center gap-2 text-[10px] font-bold text-slate-600 hover:text-slate-800 transition-colors"
@@ -307,37 +446,63 @@ export default function SprintManagement({
                   <ChevronDown size={12} className={showProjectsDropdown ? "rotate-180" : ""} />
                 </button>
                 
-                {showProjectsDropdown && (
-                  <div className="absolute top-full left-0 mt-2 w-64 bg-white border border-slate-200 rounded-xl shadow-lg z-50 py-2 max-h-60 overflow-y-auto">
-                    <div className="text-xs font-bold text-slate-500 uppercase px-4 py-2">Select Project</div>
-                    {projects.map((project) => (
-                      <button
-                        key={project._id}
-                        onClick={() => {
-                          onProjectSelect(project);
-                          setShowProjectsDropdown(false);
-                        }}
-                        className={`w-full flex items-center gap-3 px-4 py-2 hover:bg-slate-50 transition-colors text-left ${
-                          selectedProject?._id === project._id ? "bg-purple-50" : ""
-                        }`}
-                      >
-                        <div className="w-6 h-6 bg-[#3fa87d] rounded flex items-center justify-center text-white text-xs font-bold">
-                          {project.key.substring(0, 2)}
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <div className="text-sm font-bold text-slate-800 truncate">{project.name}</div>
-                          <div className="text-xs text-slate-500 truncate">ID: {project.key}</div>
-                        </div>
-                      </button>
-                    ))}
-                  </div>
+                {/* Refresh backlog button */}
+                {selectedProject && (
+                  <button
+                    onClick={refreshBacklogData}
+                    disabled={refreshingBacklog}
+                    className="flex items-center gap-1 text-[10px] font-bold text-blue-600 hover:text-blue-800 transition-colors disabled:opacity-50"
+                    title="Refresh backlog data"
+                  >
+                    <RefreshCw size={10} className={refreshingBacklog ? "animate-spin" : ""} />
+                    {refreshingBacklog ? "Refreshing..." : "Refresh Backlog"}
+                  </button>
                 )}
               </div>
+              
+              {showProjectsDropdown && (
+                <div className="absolute top-full left-0 mt-2 w-64 bg-white border border-slate-200 rounded-xl shadow-lg z-50 py-2 max-h-60 overflow-y-auto">
+                  <div className="text-xs font-bold text-slate-500 uppercase px-4 py-2">Select Project</div>
+                  {projects.map((project) => (
+                    <button
+                      key={project._id}
+                      onClick={() => {
+                        onProjectSelect(project);
+                        setShowProjectsDropdown(false);
+                      }}
+                      className={`w-full flex items-center gap-3 px-4 py-2 hover:bg-slate-50 transition-colors text-left ${
+                        selectedProject?._id === project._id ? "bg-purple-50" : ""
+                      }`}
+                    >
+                      <div className="w-6 h-6 bg-[#3fa87d] rounded flex items-center justify-center text-white text-xs font-bold">
+                        {project.key.substring(0, 2)}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm font-bold text-slate-800 truncate">{project.name}</div>
+                        <div className="text-xs text-slate-500 truncate">ID: {project.key}</div>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
           
-          {/* Action Buttons - Only Create Sprint button remains */}
+          {/* Action Buttons */}
           <div className="flex items-center gap-2">
+            {/* Refresh Backlog Button */}
+            {selectedProject && (
+              <button
+                onClick={refreshBacklogData}
+                disabled={refreshingBacklog}
+                className="px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl transition-colors flex items-center gap-2 disabled:opacity-50"
+                title="Refresh backlog data"
+              >
+                <RefreshCw size={14} className={refreshingBacklog ? "animate-spin" : ""} />
+                {refreshingBacklog ? "Refreshing..." : "Refresh Backlog"}
+              </button>
+            )}
+            
             {/* Create Sprint Button */}
             <button
               onClick={handleCreateSprint}
@@ -391,14 +556,23 @@ export default function SprintManagement({
                   </div>
                 </div>
               </div>
-              <button
-                onClick={() => handleCompleteSprint(activeSprint._id)}
-                disabled={loading}
-                className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white text-xs font-bold rounded-xl transition-colors flex items-center gap-2 disabled:opacity-50"
-              >
-                {loading ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle size={14} />}
-                Complete Sprint
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => handleViewSprint(activeSprint._id)}
+                  className="px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl transition-colors flex items-center gap-2"
+                  title="View Sprint Details"
+                >
+                  <Eye size={14} /> View
+                </button>
+                <button
+                  onClick={() => handleCompleteSprint(activeSprint._id)}
+                  disabled={loading}
+                  className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white text-xs font-bold rounded-xl transition-colors flex items-center gap-2 disabled:opacity-50"
+                >
+                  {loading ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle size={14} />}
+                  Complete Sprint
+                </button>
+              </div>
             </div>
             
             {/* Active Sprint Progress */}
@@ -548,26 +722,44 @@ export default function SprintManagement({
                       </div>
 
                       <div className="flex flex-col items-end gap-2 ml-4">
-                        {sprint.status === "Planned" && (
+                        <div className="flex gap-2">
                           <button
-                            onClick={() => handleStartSprint(sprint._id)}
-                            disabled={loading}
-                            className="px-3 py-1.5 bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold rounded-lg transition-colors flex items-center gap-1 whitespace-nowrap disabled:opacity-50"
+                            onClick={() => handleViewSprint(sprint._id)}
+                            className="p-1.5 hover:bg-blue-100 text-blue-600 rounded-lg transition-colors"
+                            title="View Sprint"
                           >
-                            {loading ? <Loader2 size={12} className="animate-spin" /> : <PlayCircle size={12} />}
-                            Start Sprint
+                            <Eye size={14} />
                           </button>
-                        )}
-                        {sprint.status === "Active" && (
-                          <button
-                            onClick={() => handleCompleteSprint(sprint._id)}
-                            disabled={loading}
-                            className="px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white text-xs font-bold rounded-lg transition-colors flex items-center gap-1 disabled:opacity-50"
-                          >
-                            {loading ? <Loader2 size={12} className="animate-spin" /> : <CheckCircle size={12} />}
-                            Complete
-                          </button>
-                        )}
+                          {sprint.status === "Planned" && (
+                            <button
+                              onClick={() => handleEditSprint(sprint._id)}
+                              className="p-1.5 hover:bg-yellow-100 text-yellow-600 rounded-lg transition-colors"
+                              title="Edit Sprint"
+                            >
+                              <Edit2 size={14} />
+                            </button>
+                          )}
+                          {sprint.status === "Planned" && (
+                            <button
+                              onClick={() => handleStartSprint(sprint._id)}
+                              disabled={loading}
+                              className="px-3 py-1.5 bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold rounded-lg transition-colors flex items-center gap-1 whitespace-nowrap disabled:opacity-50"
+                            >
+                              {loading ? <Loader2 size={12} className="animate-spin" /> : <PlayCircle size={12} />}
+                              Start Sprint
+                            </button>
+                          )}
+                          {sprint.status === "Active" && (
+                            <button
+                              onClick={() => handleCompleteSprint(sprint._id)}
+                              disabled={loading}
+                              className="px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white text-xs font-bold rounded-lg transition-colors flex items-center gap-1 disabled:opacity-50"
+                            >
+                              {loading ? <Loader2 size={12} className="animate-spin" /> : <CheckCircle size={12} />}
+                              Complete
+                            </button>
+                          )}
+                        </div>
                         <div className="flex gap-1">
                           <button
                             onClick={() => handleDeleteSprint(sprint._id)}
@@ -599,9 +791,7 @@ export default function SprintManagement({
                             <div className="flex justify-between">
                               <span className="text-xs text-slate-500">Duration:</span>
                               <span className="text-xs font-medium text-slate-700">
-                                {getDaysRemaining(sprint.endDate) > 0 
-                                  ? `${getDaysRemaining(sprint.endDate)} days remaining` 
-                                  : "Completed"}
+                                {formatDuration(sprint.startDate, sprint.endDate)}
                               </span>
                             </div>
                           </div>
@@ -636,25 +826,25 @@ export default function SprintManagement({
                               <div className="bg-slate-50 p-2 rounded-lg">
                                 <div className="text-xs text-slate-500">To Do</div>
                                 <div className="text-sm font-bold text-slate-800">
-                                  {sprint.tasks.filter((t: any) => t.status === "To Do").length}
+                                  {metrics.todoTasks}
                                 </div>
                               </div>
                               <div className="bg-slate-50 p-2 rounded-lg">
                                 <div className="text-xs text-slate-500">In Progress</div>
                                 <div className="text-sm font-bold text-slate-800">
-                                  {sprint.tasks.filter((t: any) => t.status === "In Progress").length}
+                                  {metrics.inProgressTasks}
                                 </div>
                               </div>
                               <div className="bg-slate-50 p-2 rounded-lg">
                                 <div className="text-xs text-slate-500">Review</div>
                                 <div className="text-sm font-bold text-slate-800">
-                                  {sprint.tasks.filter((t: any) => t.status === "Review").length}
+                                  {metrics.reviewTasks}
                                 </div>
                               </div>
                               <div className="bg-slate-50 p-2 rounded-lg">
                                 <div className="text-xs text-slate-500">Done</div>
                                 <div className="text-sm font-bold text-slate-800">
-                                  {sprint.tasks.filter((t: any) => t.status === "Done").length}
+                                  {metrics.doneTasks}
                                 </div>
                               </div>
                             </div>
@@ -713,6 +903,24 @@ export default function SprintManagement({
           existingSprints={sprints}
           previousSprints={previousSprints}
           allProjects={projects}
+        />
+      )}
+
+      {/* Sprint View/Edit Modal */}
+      {showViewEditModal && viewEditSprint && (
+        <SprintViewEditModal
+          show={showViewEditModal}
+          onClose={() => {
+            setShowViewEditModal(false);
+            setViewEditSprint(null);
+            setEditingSprint(null);
+          }}
+          sprint={viewEditSprint}
+          editing={!!editingSprint}
+          project={selectedProject!}
+          employees={employees}
+          onSprintUpdated={handleSprintUpdated}
+          onSprintDeleted={handleDeleteSprint}
         />
       )}
 

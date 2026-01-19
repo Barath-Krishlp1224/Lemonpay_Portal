@@ -68,24 +68,75 @@ const sumAllSubtasksStoryPoints = (subtasks: Subtask[] | undefined | null): numb
   }, 0);
 };
 
+// --- All Task Statuses ---
+const allTaskStatuses = [
+  // Planning
+  "Icebox",
+  "Backlog",
+  "Prioritized",
+  
+  // Ready
+  "Todo",
+  "Ready for Dev",
+  
+  // Development
+  "In Progress",
+  "Dev Review",
+  "Code Review",
+  
+  // Testing
+  "QA Ready",
+  "QA In Progress",
+  "QA Review",
+  
+  // Review & Approval
+  "UAT",
+  "Client Review",
+  
+  // Release
+  "Ready for Release",
+  "Staging",
+  "Production",
+  "Live",
+  
+  // Completion
+  "Done",
+  "Closed",
+  
+  // Issues
+  "Blocked",
+  "On Hold",
+  "Rejected"
+];
+
 // --- Status Color Logic (Backgrounds only, Text is Black) ---
 const getStatusBgColor = (status: string = "") => {
-  switch (status.toLowerCase()) {
-    case "completed":
-    case "done":
-      return "bg-emerald-200 border-emerald-300";
-    case "in progress":
-      return "bg-blue-200 border-blue-300";
-    case "to do":
-    case "todo":
-      return "bg-slate-200 border-slate-300";
-    case "paused":
-      return "bg-amber-200 border-amber-300";
-    case "backlog":
-      return "bg-purple-200 border-purple-300";
-    default:
-      return "bg-slate-100 border-slate-200";
-  }
+  const statusColors: Record<string, string> = {
+    "Icebox": "bg-gray-100 text-gray-800 border-gray-200",
+    "Backlog": "bg-slate-100 text-slate-800 border-slate-200",
+    "Prioritized": "bg-blue-100 text-blue-800 border-blue-200",
+    "Todo": "bg-blue-50 text-blue-900 border-blue-100",
+    "Ready for Dev": "bg-cyan-100 text-cyan-800 border-cyan-200",
+    "In Progress": "bg-amber-100 text-amber-800 border-amber-200",
+    "Dev Review": "bg-purple-100 text-purple-800 border-purple-200",
+    "Code Review": "bg-violet-100 text-violet-800 border-violet-200",
+    "QA Ready": "bg-fuchsia-100 text-fuchsia-800 border-fuchsia-200",
+    "QA In Progress": "bg-pink-100 text-pink-800 border-pink-200",
+    "QA Review": "bg-rose-100 text-rose-800 border-rose-200",
+    "UAT": "bg-indigo-100 text-indigo-800 border-indigo-200",
+    "Client Review": "bg-indigo-50 text-indigo-900 border-indigo-100",
+    "Ready for Release": "bg-teal-100 text-teal-800 border-teal-200",
+    "Staging": "bg-orange-100 text-orange-800 border-orange-200",
+    "Production": "bg-green-100 text-green-800 border-green-200",
+    "Live": "bg-emerald-100 text-emerald-800 border-emerald-200",
+    "Done": "bg-emerald-50 text-emerald-900 border-emerald-100",
+    "Closed": "bg-gray-100 text-gray-800 border-gray-200",
+    "Blocked": "bg-red-100 text-red-800 border-red-200",
+    "On Hold": "bg-yellow-100 text-yellow-800 border-yellow-200",
+    "Rejected": "bg-red-50 text-red-900 border-red-100",
+  };
+  
+  return statusColors[status] || "bg-slate-100 text-slate-800 border-slate-200";
 };
 
 // --- Get Subtask Progress with Fallback ---
@@ -130,7 +181,12 @@ const canUserEditSubtask = (subtask: Subtask, currentUser: { name: string; role:
 const DueDateReminder: React.FC<{ dueDate?: string | null; endDate?: string | null; status?: string }> = ({ dueDate, endDate, status }) => {
   const daysToDue = calculateDaysDiff(dueDate);
   const daysToEnd = calculateDaysDiff(endDate);
-  if (status === "Completed" || (daysToDue === null && daysToEnd === null)) return null;
+  
+  // Check if status is a completion status
+  const completionStatuses = ["Done", "Completed", "Closed", "Live"];
+  const isCompleted = completionStatuses.includes(status || "");
+  
+  if (isCompleted || (daysToDue === null && daysToEnd === null)) return null;
   const daysRemaining = (daysToDue ?? daysToEnd) as number;
   const isOverdue = daysRemaining < 0;
   const isUrgent = daysRemaining <= 2;
@@ -300,7 +356,6 @@ interface TaskModalProps {
   subtasks: Subtask[];
   employees: Employee[];
   currentProjectPrefix: string;
-  allTaskStatuses: string[];
   handleEdit: (task: Task) => void;
   handleDelete: (id: string) => void;
   handleUpdate: (e: React.FormEvent) => void;
@@ -323,7 +378,7 @@ interface TaskModalProps {
 const TaskModal: React.FC<TaskModalProps> = (props) => {
   const {
     task, isOpen, onClose, isEditing, draftTask, subtasks, employees,
-    currentProjectPrefix, allTaskStatuses, handleEdit, handleDelete,
+    currentProjectPrefix, handleEdit, handleDelete,
     handleUpdate, cancelEdit, handleDraftChange, handleSubtaskChange,
     addSubtask, removeSubtask, onToggleEdit, onToggleExpansion,
     handleStartSprint, onTaskStatusChange, onSubtaskStatusChange, isLoading = false,
@@ -773,7 +828,8 @@ const TaskModal: React.FC<TaskModalProps> = (props) => {
 
         {/* Action Footer with permission-based controls */}
         <div className="p-10 border-t border-slate-100 flex justify-end gap-4 bg-white sticky bottom-0 z-20">
-          {task.status === "Backlog" && !isEditing && canEditTask && (
+          {/* Only show "Start Sprint" for tasks in Icebox or Backlog status */}
+          {(task.status === "Icebox" || task.status === "Backlog") && !isEditing && canEditTask && (
              <button onClick={() => handleStartSprint(task._id)} className="px-8 py-4 bg-emerald-500 hover:bg-emerald-600 text-white rounded-[2rem] font-black text-[10px] uppercase shadow-lg transition-all flex items-center gap-2">
                 <Play size={18}/> Start Sprint
              </button>
