@@ -15,7 +15,10 @@ import {
   Trello,
   Shield,
   Database,
-  Play
+  Play,
+  MessageSquare,
+  Paperclip,
+  Upload
 } from "lucide-react";
 import { toast, ToastContainer } from "react-toastify";
 import "react-toastify/dist/ReactToastify.css";
@@ -24,47 +27,32 @@ import TaskModal from "./components/TaskModal";
 import TaskBoardView from "./components/TaskBoardView";
 
 // Types & Utils
-import { Task, Subtask, Employee } from "./components/types";
+import { Task, Subtask, Employee, Comment, Attachment } from "./components/types";
 import { getAggregatedTaskData } from "./utils/aggregation";
 
 type Role = "Admin" | "Manager" | "TeamLead" | "Employee";
 
 // All task statuses matching the Mongoose model
 const allTaskStatuses = [
-  // Planning
   "Icebox",
   "Backlog",
   "Prioritized",
-  
-  // Ready
   "Todo",
   "Ready for Dev",
-  
-  // Development
   "In Progress",
   "Dev Review",
   "Code Review",
-  
-  // Testing
   "QA Ready",
   "QA In Progress",
   "QA Review",
-  
-  // Review & Approval
   "UAT",
   "Client Review",
-  
-  // Release
   "Ready for Release",
   "Staging",
   "Production",
   "Live",
-  
-  // Completion
   "Done",
   "Closed",
-  
-  // Issues
   "Blocked",
   "On Hold",
   "Rejected"
@@ -90,6 +78,7 @@ const TasksPage: React.FC = () => {
   const [isEditing, setIsEditing] = useState(false);
   const [draftTask, setDraftTask] = useState<Partial<Task>>({});
   const [subtasks, setSubtasks] = useState<Subtask[]>([]);
+  const [comments, setComments] = useState<Comment[]>([]);
   const [currentProjectPrefix, setCurrentProjectPrefix] = useState<string>("");
 
   const getApiUrl = (path: string): string => {
@@ -98,19 +87,361 @@ const TasksPage: React.FC = () => {
   };
 
   // Helper function to get auth headers
-  const getAuthHeaders = () => {
-    return {
-      "x-user-id": currentUserId,
-      "x-user-name": currentUserName,
-      "x-user-role": currentUserRole
+  const getAuthHeaders = (): Record<string, string> => {
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json"
     };
+    
+    const effectiveUserId = currentUserId || (typeof window !== "undefined" ? localStorage.getItem("userId") : null) || "";
+    const effectiveUserName = currentUserName || (typeof window !== "undefined" ? localStorage.getItem("userName") : null) || "";
+    const effectiveUserRole = currentUserRole || (typeof window !== "undefined" ? localStorage.getItem("userRole") : null) || "";
+    
+    headers["x-user-id"] = effectiveUserId;
+    headers["x-user-name"] = effectiveUserName;
+    headers["x-user-role"] = effectiveUserRole;
+    
+    return headers;
   };
+
+  // Fetch comments for a specific task
+  const fetchComments = useCallback(async (taskId: string) => {
+    try {
+      console.log(`Fetching comments for task: ${taskId}`);
+      console.log(`Auth headers:`, getAuthHeaders());
+      
+      const res = await fetch(getApiUrl(`/api/tasks/${taskId}/comments`), {
+        headers: getAuthHeaders()
+      });
+      
+      console.log(`Comments API response status: ${res.status}`);
+      
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success && Array.isArray(data.comments)) {
+          console.log(`Loaded ${data.comments.length} comments for task ${taskId}`);
+          return data.comments;
+        }
+      } else {
+        const errorData = await res.json();
+        console.error("Failed to fetch comments:", errorData);
+      }
+    } catch (err) {
+      console.error("Error fetching comments:", err);
+    }
+    return [];
+  }, []);
+
+  // Add a new comment with attachments
+  const addComment = useCallback(async (taskId: string, commentText: string, attachments?: File[]) => {
+    try {
+      console.log(`Adding comment to task ${taskId}:`, commentText);
+      
+      if (attachments && attachments.length > 0) {
+        console.log(`Uploading ${attachments.length} attachments`);
+        
+        // For file uploads, use FormData
+        const formData = new FormData();
+        formData.append("text", commentText);
+        
+        attachments.forEach((file, index) => {
+          formData.append(`attachments`, file);
+        });
+        
+        // Add user info to form data
+        formData.append("userId", currentUserId);
+        formData.append("userName", currentUserName);
+        formData.append("userRole", currentUserRole);
+        
+        const res = await fetch(getApiUrl(`/api/tasks/${taskId}/comments`), {
+          method: "POST",
+          headers: {
+            "x-user-id": currentUserId,
+            "x-user-name": currentUserName,
+            "x-user-role": currentUserRole
+          },
+          body: formData
+        });
+        
+        console.log(`Add comment with attachments API response status: ${res.status}`);
+        
+        if (res.ok) {
+          const data = await res.json();
+          if (data.success && data.comment) {
+            toast.success("Comment added with attachments");
+            
+            // Update local comments state
+            setComments(prev => [...prev, data.comment]);
+            
+            // Update the task's comment count in the tasks list
+            setTasks(prevTasks => 
+              prevTasks.map(task => 
+                task._id === taskId 
+                  ? { 
+                      ...task, 
+                      commentCount: (task.commentCount || 0) + 1,
+                      lastCommentAt: new Date().toISOString()
+                    }
+                  : task
+              )
+            );
+            
+            return data.comment;
+          }
+        } else {
+          const errorData = await res.json();
+          console.error("Failed to add comment with attachments:", errorData);
+          toast.error(errorData.error || "Failed to add comment with attachments");
+        }
+      } else {
+        // For text-only comments
+        console.log(`Auth headers:`, getAuthHeaders());
+        
+        const res = await fetch(getApiUrl(`/api/tasks/${taskId}/comments`), {
+          method: "POST",
+          headers: getAuthHeaders(),
+          body: JSON.stringify({
+            text: commentText
+          })
+        });
+
+        console.log(`Add comment API response status: ${res.status}`);
+        
+        if (res.ok) {
+          const data = await res.json();
+          if (data.success && data.comment) {
+            toast.success("Comment added");
+            
+            // Update local comments state
+            setComments(prev => [...prev, data.comment]);
+            
+            // Update the task's comment count in the tasks list
+            setTasks(prevTasks => 
+              prevTasks.map(task => 
+                task._id === taskId 
+                  ? { 
+                      ...task, 
+                      commentCount: (task.commentCount || 0) + 1,
+                      lastCommentAt: new Date().toISOString()
+                    }
+                  : task
+              )
+            );
+            
+            return data.comment;
+          }
+        } else {
+          const errorData = await res.json();
+          console.error("Failed to add comment:", errorData);
+          toast.error(errorData.error || "Failed to add comment");
+        }
+      }
+    } catch (err) {
+      console.error("Error adding comment:", err);
+      toast.error("Failed to add comment");
+    }
+    return null;
+  }, [currentUserId, currentUserName, currentUserRole]);
+
+  // Update an existing comment with attachments
+  const updateComment = useCallback(async (taskId: string, commentId: string, newText: string, attachments?: File[], removedAttachmentIds?: string[]) => {
+    try {
+      console.log(`Updating comment ${commentId} for task ${taskId}:`, newText);
+      
+      if (attachments && attachments.length > 0) {
+        // For file uploads with updates, use FormData
+        const formData = new FormData();
+        formData.append("commentId", commentId);
+        formData.append("text", newText);
+        
+        if (removedAttachmentIds && removedAttachmentIds.length > 0) {
+          formData.append("removedAttachmentIds", JSON.stringify(removedAttachmentIds));
+        }
+        
+        attachments.forEach((file, index) => {
+          formData.append(`newAttachments`, file);
+        });
+        
+        // Add user info to form data
+        formData.append("userId", currentUserId);
+        formData.append("userName", currentUserName);
+        formData.append("userRole", currentUserRole);
+        
+        const res = await fetch(getApiUrl(`/api/tasks/${taskId}/comments`), {
+          method: "PUT",
+          headers: {
+            "x-user-id": currentUserId,
+            "x-user-name": currentUserName,
+            "x-user-role": currentUserRole
+          },
+          body: formData
+        });
+        
+        console.log(`Update comment with attachments API response status: ${res.status}`);
+        
+        if (res.ok) {
+          const data = await res.json();
+          if (data.success && data.comment) {
+            toast.success("Comment updated");
+            
+            // Update local comments state
+            setComments(prev => prev.map(comment => 
+              comment._id === commentId || comment.id === commentId
+                ? { ...comment, ...data.comment, editedAt: new Date().toISOString() }
+                : comment
+            ));
+            
+            return data.comment;
+          }
+        } else {
+          const errorData = await res.json();
+          console.error("Failed to update comment with attachments:", errorData);
+          toast.error(errorData.error || "Failed to update comment");
+        }
+      } else {
+        // For text-only updates
+        console.log(`Auth headers:`, getAuthHeaders());
+        
+        const res = await fetch(getApiUrl(`/api/tasks/${taskId}/comments`), {
+          method: "PUT",
+          headers: getAuthHeaders(),
+          body: JSON.stringify({
+            commentId,
+            text: newText,
+            ...(removedAttachmentIds && removedAttachmentIds.length > 0 && { removedAttachmentIds })
+          })
+        });
+
+        console.log(`Update comment API response status: ${res.status}`);
+        
+        if (res.ok) {
+          const data = await res.json();
+          if (data.success && data.comment) {
+            toast.success("Comment updated");
+            
+            // Update local comments state
+            setComments(prev => prev.map(comment => 
+              comment._id === commentId || comment.id === commentId
+                ? { ...comment, ...data.comment, editedAt: new Date().toISOString() }
+                : comment
+            ));
+            
+            return data.comment;
+          }
+        } else {
+          const errorData = await res.json();
+          console.error("Failed to update comment:", errorData);
+          toast.error(errorData.error || "Failed to update comment");
+        }
+      }
+    } catch (err) {
+      console.error("Error updating comment:", err);
+      toast.error("Failed to update comment");
+    }
+    return null;
+  }, [currentUserId, currentUserName, currentUserRole]);
+
+  // Delete a comment
+  const deleteComment = useCallback(async (taskId: string, commentId: string) => {
+    try {
+      console.log(`Deleting comment ${commentId} from task ${taskId}`);
+      console.log(`Auth headers:`, getAuthHeaders());
+      
+      const res = await fetch(getApiUrl(`/api/tasks/${taskId}/comments?commentId=${commentId}`), {
+        method: "DELETE",
+        headers: getAuthHeaders()
+      });
+
+      console.log(`Delete comment API response status: ${res.status}`);
+      
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success) {
+          toast.success("Comment deleted");
+          
+          // Update local comments state
+          setComments(prev => prev.filter(comment => 
+            comment._id !== commentId && comment.id !== commentId
+          ));
+          
+          // Update the task's comment count in the tasks list
+          setTasks(prevTasks => 
+            prevTasks.map(task => 
+              task._id === taskId 
+                ? { 
+                    ...task, 
+                    commentCount: Math.max(0, (task.commentCount || 1) - 1)
+                  }
+                : task
+            )
+          );
+          
+          return true;
+        }
+      } else {
+        const errorData = await res.json();
+        console.error("Failed to delete comment:", errorData);
+        toast.error(errorData.error || "Failed to delete comment");
+      }
+    } catch (err) {
+      console.error("Error deleting comment:", err);
+      toast.error("Failed to delete comment");
+    }
+    return false;
+  }, []);
+
+  // Delete an attachment
+  const deleteAttachment = useCallback(async (taskId: string, commentId: string, attachmentId: string) => {
+    try {
+      console.log(`Deleting attachment ${attachmentId} from comment ${commentId} in task ${taskId}`);
+      console.log(`Auth headers:`, getAuthHeaders());
+      
+      const res = await fetch(getApiUrl(`/api/tasks/${taskId}/comments/attachments`), {
+        method: "DELETE",
+        headers: getAuthHeaders(),
+        body: JSON.stringify({
+          commentId,
+          attachmentId
+        })
+      });
+
+      console.log(`Delete attachment API response status: ${res.status}`);
+      
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success) {
+          toast.success("Attachment deleted");
+          
+          // Update local comments state
+          setComments(prev => prev.map(comment => {
+            if (comment._id === commentId || comment.id === commentId) {
+              return {
+                ...comment,
+                attachments: comment.attachments?.filter(att => att.id !== attachmentId)
+              };
+            }
+            return comment;
+          }));
+          
+          return true;
+        }
+      } else {
+        const errorData = await res.json();
+        console.error("Failed to delete attachment:", errorData);
+        toast.error(errorData.error || "Failed to delete attachment");
+      }
+    } catch (err) {
+      console.error("Error deleting attachment:", err);
+      toast.error("Failed to delete attachment");
+    }
+    return false;
+  }, []);
 
   // Fetch tasks with employee filtering
   const fetchTasks = useCallback(async () => {
     try {
       console.log("Fetching tasks...");
       setDebugInfo("Fetching tasks from API...");
+      console.log(`Auth headers for tasks:`, getAuthHeaders());
       
       const res = await fetch(getApiUrl("/api/tasks"), {
         headers: getAuthHeaders()
@@ -170,18 +501,31 @@ const TasksPage: React.FC = () => {
             }));
           }
           
+          // Ensure comments have attachments array
+          let taskComments: Comment[] = [];
+          if (task.comments && Array.isArray(task.comments)) {
+            taskComments = task.comments.map(comment => ({
+              ...comment,
+              attachments: comment.attachments || []
+            }));
+          }
+          
           return {
             ...task,
             status: normalizedStatus,
             subtasks: taskSubtasks,
+            comments: taskComments,
             taskDisplayName: task.summary || task.title || task.name || `Task ${task.taskId || task._id?.substring(0, 8)}`,
-            name: task.summary || task.title || task.name || `Task ${task.taskId || task._id?.substring(0, 8)}`
+            name: task.summary || task.title || task.name || `Task ${task.taskId || task._id?.substring(0, 8)}`,
+            commentCount: task.commentCount || taskComments.length || 0,
+            lastCommentAt: task.lastCommentAt
           };
         });
         
         console.log('Sample task subtasks count:', taskData[0]?.subtasks?.length || 0);
-        if (taskData.length > 0 && taskData[0].subtasks) {
-          console.log('First task subtasks sample:', taskData[0].subtasks.slice(0, 1));
+        console.log('Sample task comments count:', taskData[0]?.comments?.length || 0);
+        if (taskData.length > 0 && taskData[0].comments && taskData[0].comments[0]) {
+          console.log('First comment attachments:', taskData[0].comments[0].attachments);
         }
         
         setTasks(taskData);
@@ -200,12 +544,15 @@ const TasksPage: React.FC = () => {
 
   const fetchEmployees = async () => {
     try {
+      console.log(`Fetching employees with headers:`, getAuthHeaders());
       const res = await fetch(getApiUrl("/api/employees"), {
         headers: getAuthHeaders()
       });
       const data = await res.json();
       if (res.ok && data.success) {
         setEmployees(data.employees || []);
+      } else {
+        console.error("Failed to fetch employees:", data);
       }
     } catch (err) {
       console.error("Failed to fetch employees:", err);
@@ -216,7 +563,7 @@ const TasksPage: React.FC = () => {
   const getNewSubtask = (prefix: string, pathStr: string): Subtask => ({
     id: `${prefix}-SUB-${pathStr}-${Math.floor(Math.random() * 1000)}`,
     title: "",
-    assigneeName: currentUserName, // Default to current user for subtasks
+    assigneeName: currentUserName,
     status: "To Do",
     completion: 0,
     remarks: "",
@@ -261,7 +608,7 @@ const TasksPage: React.FC = () => {
     return traverse(currentSubs, path);
   };
 
-  const openTaskModal = (task: Task) => {
+  const openTaskModal = async (task: Task) => {
     // Check if employee is assigned to this task
     if (currentUserRole === "Employee") {
       const isAssigned = task.assigneeNames?.some(
@@ -299,19 +646,20 @@ const TasksPage: React.FC = () => {
       }));
     }
     
-    // CRITICAL FIX: DO NOT FILTER SUBTASKS FOR EMPLOYEES
     // All users should see ALL subtasks, regardless of assignment
-    // Only editing permissions will be restricted based on assignee
     const processedTask = {
       ...aggregated,
       name: aggregated.summary || aggregated.title || aggregated.name || `Task ${aggregated.taskId || aggregated._id?.substring(0, 8)}`,
       taskDisplayName: aggregated.summary || aggregated.title || aggregated.name || `Task ${aggregated.taskId || aggregated._id?.substring(0, 8)}`,
-      // Always include all subtasks for all users
       subtasks: taskSubtasks
     };
     
+    // Fetch comments for this task
+    const taskComments = await fetchComments(task._id);
+    
     setSelectedTaskForModal(processedTask);
-    setSubtasks(taskSubtasks); // Pass ALL subtasks
+    setSubtasks(taskSubtasks);
+    setComments(taskComments);
     setCurrentProjectPrefix(processedTask.taskId?.split('-')[0] || "TASK");
     setDraftTask(processedTask);
     setIsModalOpen(true);
@@ -322,6 +670,7 @@ const TasksPage: React.FC = () => {
     setIsModalOpen(false);
     setIsEditing(false);
     setSelectedTaskForModal(null);
+    setComments([]);
   };
 
   const onTaskStatusChange = useCallback(async (taskId: string, newStatus: string) => {
@@ -362,15 +711,9 @@ const TasksPage: React.FC = () => {
 
       const res = await fetch(getApiUrl(`/api/tasks/${taskId}`), {
         method: "PUT",
-        headers: { 
-          "Content-Type": "application/json",
-          ...getAuthHeaders()
-        },
+        headers: getAuthHeaders(),
         body: JSON.stringify({ 
-          status: normalizedStatus,
-          userId: currentUserId,
-          userName: currentUserName,
-          userRole: currentUserRole
+          status: normalizedStatus
         }),
       });
       
@@ -446,15 +789,9 @@ const TasksPage: React.FC = () => {
       
       const res = await fetch(getApiUrl(`/api/tasks/${taskId}`), {
         method: "PUT",
-        headers: { 
-          "Content-Type": "application/json",
-          ...getAuthHeaders()
-        },
+        headers: getAuthHeaders(),
         body: JSON.stringify({ 
-          subtasks: updatedSubtasks,
-          userId: currentUserId,
-          userName: currentUserName,
-          userRole: currentUserRole
+          subtasks: updatedSubtasks
         }),
       });
       
@@ -508,15 +845,9 @@ const TasksPage: React.FC = () => {
 
       const res = await fetch(getApiUrl(`/api/tasks/${taskId}`), {
         method: "PUT",
-        headers: { 
-          "Content-Type": "application/json",
-          ...getAuthHeaders()
-        },
+        headers: getAuthHeaders(),
         body: JSON.stringify({ 
-          status: "Todo", // Move to Todo when starting sprint
-          userId: currentUserId,
-          userName: currentUserName,
-          userRole: currentUserRole
+          status: "Todo" // Move to Todo when starting sprint
         }),
       });
       
@@ -556,13 +887,7 @@ const TasksPage: React.FC = () => {
       console.log('Current draftTask:', draftTask);
       
       // Prepare the request body
-      const requestBody: any = {
-        // Add user info to body for API verification
-        userId: currentUserId,
-        userName: currentUserName,
-        userRole: currentUserRole,
-        updatedAt: new Date().toISOString()
-      };
+      const requestBody: any = {};
       
       // Normalize status if it's being updated
       if (draftTask.status) {
@@ -615,10 +940,7 @@ const TasksPage: React.FC = () => {
       
       const res = await fetch(getApiUrl(`/api/tasks/${selectedTaskForModal._id}`), {
         method: "PUT",
-        headers: { 
-          "Content-Type": "application/json",
-          ...getAuthHeaders()
-        },
+        headers: getAuthHeaders(),
         body: JSON.stringify(requestBody),
       });
       
@@ -679,18 +1001,96 @@ const TasksPage: React.FC = () => {
     }
   };
 
+  // Handle adding a comment with attachments
+  const handleAddComment = useCallback(async (taskId: string, commentText: string, attachments?: File[]) => {
+    if (!commentText.trim() && (!attachments || attachments.length === 0)) {
+      toast.error("Comment text or attachment is required");
+      return;
+    }
+    
+    const addedComment = await addComment(taskId, commentText, attachments);
+    if (addedComment) {
+      // Comments state is already updated in addComment function
+      // No need to update it again here
+    }
+  }, [addComment]);
+
+  // Handle updating a comment with attachments
+  const handleUpdateComment = useCallback(async (taskId: string, commentId: string, newText: string, attachments?: File[], removedAttachmentIds?: string[]) => {
+    if (!newText.trim() && (!attachments || attachments.length === 0) && (!removedAttachmentIds || removedAttachmentIds.length === 0)) {
+      toast.error("No changes detected");
+      return;
+    }
+    
+    const updatedComment = await updateComment(taskId, commentId, newText, attachments, removedAttachmentIds);
+    if (updatedComment) {
+      // Comments state is already updated in updateComment function
+    }
+  }, [updateComment]);
+
+  // Handle deleting a comment
+  const handleDeleteComment = useCallback(async (taskId: string, commentId: string) => {
+    const deleted = await deleteComment(taskId, commentId);
+    if (deleted) {
+      // Comments state is already updated in deleteComment function
+    }
+  }, [deleteComment]);
+
+  // Handle deleting an attachment
+  const handleDeleteAttachment = useCallback(async (taskId: string, commentId: string, attachmentId: string) => {
+    const deleted = await deleteAttachment(taskId, commentId, attachmentId);
+    if (deleted) {
+      // Comments state is already updated in deleteAttachment function
+    }
+  }, [deleteAttachment]);
+
+  // Handle tagging an employee in comment
+  const handleTagEmployee = useCallback((employeeName: string) => {
+    console.log(`Tagged employee: ${employeeName}`);
+    toast.info(`Tagged ${employeeName} in comment`);
+  }, []);
+
   // Initialize user data from localStorage
   useEffect(() => {
     if (typeof window !== "undefined") {
-      const role = localStorage.getItem("userRole");
-      const name = localStorage.getItem("userName");
-      const id = localStorage.getItem("userId");
+      // Generate a unique userId if not exists
+      const generateUserId = (): string => {
+        return `user-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+      };
+
+      // Get or set userId
+      let userId = localStorage.getItem("userId");
+      if (!userId) {
+        userId = generateUserId();
+        localStorage.setItem("userId", userId);
+      }
+
+      // Get or set userRole
+      let userRole = localStorage.getItem("userRole");
+      if (!userRole) {
+        userRole = "Employee";
+        localStorage.setItem("userRole", userRole);
+      }
+
+      // Get or set userName
+      let userName = localStorage.getItem("userName");
+      if (!userName) {
+        userName = "Barath Krish";
+        localStorage.setItem("userName", userName);
+      }
+
+      console.log("Initializing user:", {
+        userId,
+        userRole,
+        userName
+      });
+
+      // Set state
+      setCurrentUserId(userId);
+      setCurrentUserRole(userRole);
+      setCurrentUserName(userName);
       
-      setCurrentUserRole(role === "Admin" || role === "Manager" || role === "TeamLead" ? role : "Employee");
-      setCurrentUserName(name || "");
-      setCurrentUserId(id || "");
-      
-      setDebugInfo(`User: ${name} (${role}), ID: ${id}`);
+      setDebugInfo(`User: ${userName} (${userRole}), ID: ${userId.substring(0, 8)}...`);
     }
   }, []);
 
@@ -703,14 +1103,17 @@ const TasksPage: React.FC = () => {
     init();
   }, [fetchTasks]);
 
-  // Filter tasks based on role and search - with proper task name display
+  // Filter tasks based on role and search
   const filteredTasks = useMemo(() => {
     console.log("Current user:", { currentUserRole, currentUserName, currentUserId });
     
     let base = tasks.map(task => ({
       ...task,
       name: task.summary || task.title || task.name || `Task ${task.taskId || task._id?.substring(0, 8)}`,
-      taskDisplayName: task.summary || task.title || task.name || `Task ${task.taskId || task._id?.substring(0, 8)}`
+      taskDisplayName: task.summary || task.title || task.name || `Task ${task.taskId || task._id?.substring(0, 8)}`,
+      commentCount: task.commentCount || 0,
+      lastCommentAt: task.lastCommentAt,
+      comments: task.comments || []
     }));
     
     // Apply role-based filtering
@@ -723,6 +1126,7 @@ const TasksPage: React.FC = () => {
         
         const isAssigned = assigneeMatches || assigneeIdMatches;
         
+        console.log(`Task ${t.taskId} assigned to ${t.assigneeNames}: ${isAssigned}`);
         return isAssigned;
       });
       
@@ -765,7 +1169,7 @@ const TasksPage: React.FC = () => {
     return base;
   }, [tasks, currentUserRole, currentUserName, currentUserId, searchTerm, statusFilter]);
 
-  // Stats for employee dashboard (only their assigned tasks)
+  // Stats for employee dashboard
   const taskStats = useMemo(() => {
     if (currentUserRole !== "Employee") {
       return { total: 0, completed: 0, inProgress: 0, todo: 0 };
@@ -779,7 +1183,6 @@ const TasksPage: React.FC = () => {
       return assigneeMatches || assigneeIdMatches;
     });
     
-    // Updated to include all completion statuses
     const completionStatuses = ["Done", "Completed", "Closed", "Live"];
     const todoStatuses = ["Todo", "Backlog", "Icebox", "Prioritized", "Ready for Dev"];
     const inProgressStatuses = ["In Progress", "Dev Review", "Code Review", "QA Ready", "QA In Progress", "QA Review", "UAT", "Client Review", "Ready for Release", "Staging"];
@@ -799,6 +1202,28 @@ const TasksPage: React.FC = () => {
     toast.info("Tasks refreshed");
   };
 
+  // Function to simulate login for testing
+  const handleTestLogin = () => {
+    const testUser = {
+      name: "Barath Krish",
+      role: "Employee",
+      id: `user-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
+    };
+    
+    localStorage.setItem("userName", testUser.name);
+    localStorage.setItem("userRole", testUser.role);
+    localStorage.setItem("userId", testUser.id);
+    
+    setCurrentUserName(testUser.name);
+    setCurrentUserRole(testUser.role);
+    setCurrentUserId(testUser.id);
+    
+    toast.success(`Logged in as ${testUser.name}`);
+    
+    // Refresh data
+    handleRefresh();
+  };
+
   if (loading) return (
     <div className="flex flex-col justify-center items-center min-h-screen bg-white">
       <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mb-4"></div>
@@ -815,7 +1240,16 @@ const TasksPage: React.FC = () => {
     <div className="flex min-h-screen bg-[#F8FAFC]">
       <ToastContainer position="top-right" autoClose={2000} theme="dark" /> 
       
-     
+      {!currentUserName && (
+        <div className="fixed top-4 right-4 z-50">
+          <button
+            onClick={handleTestLogin}
+            className="bg-blue-600 text-white px-4 py-2 rounded-lg font-bold hover:bg-blue-700 transition-colors shadow-lg"
+          >
+            🔐 Test Login (Barath Krish)
+          </button>
+        </div>
+      )}
 
       <main className="flex-1 min-h-screen pb-20 px-4 sm:px-6 lg:px-8 pt-44 w-full">
         <div className="mx-auto w-full max-w-none px-4">
@@ -833,10 +1267,18 @@ const TasksPage: React.FC = () => {
                   <h1 className="text-6xl font-black text-slate-900 tracking-tighter">
                     {currentUserRole === "Employee" ? "My Tasks" : "Task Board"}
                   </h1>
-                  <div className="flex items-center gap-1 bg-slate-100 px-3 py-1.5 rounded-full">
-                    <User size={14} className="text-slate-500" />
-                    <span className="text-sm font-bold text-slate-700">{currentUserName}</span>
-                  </div>
+                  {currentUserName ? (
+                    <div className="flex items-center gap-1 bg-slate-100 px-3 py-1.5 rounded-full">
+                      <User size={14} className="text-slate-500" />
+                      <span className="text-sm font-bold text-slate-700">{currentUserName}</span>
+                      <span className="text-xs text-slate-500 ml-1">({currentUserRole})</span>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-1 bg-red-100 px-3 py-1.5 rounded-full">
+                      <User size={14} className="text-red-500" />
+                      <span className="text-sm font-bold text-red-700">Not logged in</span>
+                    </div>
+                  )}
                 </div>
                 <p className="text-slate-500 font-medium text-xl">
                   {currentUserRole === "Employee" 
@@ -844,6 +1286,11 @@ const TasksPage: React.FC = () => {
                     : `Active Task Management (${filteredTasks.length})`
                   }
                 </p>
+                {debugInfo && (
+                  <div className="text-xs text-slate-500 bg-slate-50 p-2 rounded">
+                    Debug: {debugInfo}
+                  </div>
+                )}
               </div>
               
               {currentUserRole === "Employee" && taskStats.total > 0 && (
@@ -881,7 +1328,7 @@ const TasksPage: React.FC = () => {
                 </h3>
                 <p className="text-slate-400 mt-2 font-medium max-w-sm">
                   {currentUserRole === "Employee" 
-                    ? `You don't have any tasks assigned to you yet (${currentUserName}).`
+                    ? `You don't have any tasks assigned to you yet (${currentUserName || 'Not logged in'}).`
                     : "No tasks were found matching your current filters."
                   }
                 </p>
@@ -893,6 +1340,14 @@ const TasksPage: React.FC = () => {
                     <RefreshCw size={16} />
                     Refresh Tasks
                   </button>
+                  {!currentUserName && (
+                    <button 
+                      onClick={handleTestLogin}
+                      className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-full hover:bg-green-700 transition-colors"
+                    >
+                      👤 Test Login to See Tasks
+                    </button>
+                  )}
                   <p className="text-xs text-slate-500 mt-2">
                     Total tasks in system: {tasks.length}
                   </p>
@@ -925,15 +1380,15 @@ const TasksPage: React.FC = () => {
                     currentUserRole={currentUserRole}
                     currentUserName={currentUserName}
                     currentUserId={currentUserId}
-                    containerHeight="70vh" // Fixed height for the entire board
-                    columnMaxHeight="60vh" // Max height for individual columns
-                    visibleRows={2} // Show only 2 tasks initially
+                    containerHeight="70vh"
+                    columnMaxHeight="60vh"
+                    visibleRows={2}
                   />
                 </div>
               </div>
             )}
 
-                      {selectedTaskForModal && (
+            {selectedTaskForModal && (
               <TaskModal 
                 task={selectedTaskForModal} 
                 isOpen={isModalOpen} 
@@ -943,7 +1398,6 @@ const TasksPage: React.FC = () => {
                 subtasks={subtasks} 
                 employees={employees} 
                 currentProjectPrefix={currentProjectPrefix} 
-                // REMOVED: allTaskStatuses={allTaskStatuses} // This prop no longer exists
                 handleEdit={() => setIsEditing(true)} 
                 handleDelete={handleDelete} 
                 handleUpdate={handleUpdate} 
@@ -960,6 +1414,11 @@ const TasksPage: React.FC = () => {
                 onToggleExpansion={(path) => setSubtasks(prev => updateSubtaskState(prev, path, (s) => ({ ...s, isExpanded: !s.isExpanded })))} 
                 onTaskStatusChange={onTaskStatusChange} 
                 onSubtaskStatusChange={onSubtaskStatusChange} 
+                onAddComment={handleAddComment}
+                onUpdateComment={handleUpdateComment}
+                onDeleteComment={handleDeleteComment}
+                onDeleteAttachment={handleDeleteAttachment}
+                comments={comments}
                 currentUserRole={currentUserRole}
                 currentUserId={currentUserId}
                 currentUserName={currentUserName}

@@ -1,3 +1,33 @@
+export interface Attachment {
+  id: string;
+  fileName: string;
+  fileType: string;
+  fileSize: number;
+  url: string;
+  uploadedAt: string;
+  uploadedBy: string;
+  uploadedById: string;
+}
+
+export interface Comment {
+  _id?: string;
+  id?: string;
+  text: string;
+  userId: string;
+  userName: string;
+  userRole?: string;
+  timestamp?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  editedAt?: string;
+  mentions?: string[];
+  taskId?: string;
+  isEditing?: boolean;
+  canEdit?: boolean;
+  canDelete?: boolean;
+  attachments?: Attachment[];
+}
+
 export interface Subtask {
   id: string | null;
   title: string;
@@ -11,6 +41,7 @@ export interface Subtask {
   isEditing?: boolean;
   isExpanded?: boolean;
   date?: string;
+  progress?: number;
 }
 
 export interface Task {
@@ -24,23 +55,11 @@ export interface Task {
   endDate?: string;
   dueDate: string;
   completion: number;
-  status:
-    | "Backlog"
-    | "To Do" // Added To Do status
-    | "In Progress"
-    | "Dev Review"
-    | "Deployed in QA"
-    | "Test In Progress"
-    | "QA Sign Off"
-    | "Deployment Stage"
-    | "Pilot Test"
-    | "Completed"
-    | "Paused"
-    | string;
+  status: string;
   remarks?: string;
-  summary?: string; // Main task description
-  title?: string;   // Alternative title field
-  name?: string;    // Alternative name field
+  summary?: string;
+  title?: string;
+  name?: string;
   subtasks?: Subtask[];
   department?: "Tech" | "Accounts" | string;
   taskTimeSpent?: string;
@@ -51,7 +70,6 @@ export interface Task {
   createdAt?: string;
   updatedAt?: string;
   
-  // Additional fields that might come from API
   epicId?: string;
   sprintId?: string;
   labels?: string[];
@@ -63,8 +81,11 @@ export interface Task {
   projectName?: string;
   projectKey?: string;
   
-  // Helper property for display
   displayName?: string;
+  
+  commentCount?: number;
+  comments?: Comment[];
+  lastCommentAt?: string;
 }
 
 export interface Employee {
@@ -74,8 +95,20 @@ export interface Employee {
   team?: string;
   email?: string;
   role?: string;
+  avatar?: string;
 }
 
 export type SubtaskChangeHandler = (path: number[], field: keyof Subtask, value: string | number) => void;
 export type SubtaskPathHandler = (path: number[]) => void;
 export type SubtaskStatusChangeFunc = (subtaskId: string | null | undefined, newStatus: string) => void;
+
+export interface CurrentUser {
+  id: string;
+  name: string;
+  role: string;
+  email?: string;
+}
+
+// Comment action types
+export type CommentActionHandler = (commentId: string, text?: string, attachments?: File[]) => Promise<void>;
+export type CommentUpdateHandler = (commentId: string, newText: string, attachments?: File[], removedAttachmentIds?: string[]) => Promise<void>;

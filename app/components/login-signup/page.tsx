@@ -119,7 +119,7 @@ export default function App() {
               router.push("/components/hr");
               break;
             case "Accounts":
-              router.push("/components/accounts");
+              router.push("/components/employee");
               break;
             case "TL Accountant":
               router.push("/components/tl-accountant");

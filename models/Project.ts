@@ -57,9 +57,8 @@ interface IProject extends Document {
   name: string;
   key: string;
   description: string;
-  ownerId: string;
-  assigneeIds: string[];
   members: IProjectMember[];
+  assigneeIds?: string[]; // Add this line
   visibility: "PRIVATE" | "PUBLIC";
   status: "Active" | "Archived" | "Completed";
   totalTasks: number;
@@ -111,14 +110,6 @@ const ProjectSchema = new Schema<IProject>(
       default: "",
       maxlength: [500, "Description cannot exceed 500 characters"],
     },
-    ownerId: {
-      type: String,
-      required: [true, "Project lead is required"],
-    },
-    assigneeIds: {
-      type: [String],
-      default: [],
-    },
     members: {
       type: [{
         userId: {
@@ -135,6 +126,10 @@ const ProjectSchema = new Schema<IProject>(
           default: Date.now
         }
       }],
+      default: [],
+    },
+    assigneeIds: { // Add this field
+      type: [String],
       default: [],
     },
     visibility: {
@@ -337,64 +332,45 @@ ProjectSchema.pre('save', function(next) {
   next();
 });
 
-// Pre-save middleware to sync assigneeIds with members array
+// Pre-save middleware to ensure at least one admin member exists
 ProjectSchema.pre('save', function(next) {
-  if (this.isModified('assigneeIds') || this.isModified('ownerId')) {
-    // Start with owner as Admin
-    const members: IProjectMember[] = [{
-      userId: this.ownerId,
-      role: 'Admin',
-      addedAt: new Date()
-    }];
-
-    // Add assignees as Contributors
-    if (this.assigneeIds && Array.isArray(this.assigneeIds)) {
-      for (const assigneeId of this.assigneeIds) {
-        // Don't add owner twice
-        if (assigneeId !== this.ownerId) {
-          // Check if member already exists
-          const existingMember = this.members?.find(m => m.userId === assigneeId);
-          if (existingMember) {
-            // Keep existing member
-            members.push(existingMember);
-          } else {
-            // Add new member
-            members.push({
-              userId: assigneeId,
-              role: 'Contributor',
-              addedAt: new Date()
-            });
-          }
-        }
-      }
-    }
-
-    // Preserve existing members who are not in assigneeIds (like Admins or Viewers)
-    if (this.members && Array.isArray(this.members)) {
-      for (const existingMember of this.members) {
-        const isInNewList = members.some(m => m.userId === existingMember.userId);
-        const isOwner = existingMember.userId === this.ownerId;
-        
-        if (!isInNewList && !isOwner) {
-          members.push(existingMember);
-        }
-      }
-    }
-
-    this.members = members;
+  // Check if there are any admin members
+  const hasAdmin = this.members?.some(member => member.role === 'Admin');
+  
+  if (!hasAdmin && this.members?.length > 0) {
+    // If there are members but no admin, make the first member an admin
+    this.members[0].role = 'Admin';
   }
+  
+  next();
+});
+
+// Pre-save middleware to sync assigneeIds from tasks
+ProjectSchema.pre('save', function(next) {
+  // Collect all unique assigneeIds from tasks
+  const assigneeSet = new Set<string>();
+  
+  this.tasks?.forEach((task: any) => {
+    if (task.assigneeId && typeof task.assigneeId === 'string') {
+      assigneeSet.add(task.assigneeId);
+    }
+  });
+  
+  // Update assigneeIds array
+  this.assigneeIds = Array.from(assigneeSet);
+  
   next();
 });
 
 // Indexes for faster queries
-ProjectSchema.index({ ownerId: 1 });
 ProjectSchema.index({ status: 1 });
-ProjectSchema.index({ assigneeIds: 1 });
 ProjectSchema.index({ "sprints.status": 1 });
 ProjectSchema.index({ "tasks.sprintId": 1 });
 ProjectSchema.index({ "tasks.status": 1 });
 ProjectSchema.index({ "tasks.taskId": 1 });
 ProjectSchema.index({ "epics.status": 1 });
+ProjectSchema.index({ "members.userId": 1 });
+ProjectSchema.index({ "assigneeIds": 1 }); // Add index for assigneeIds
 
 // Virtual for formatted date
 ProjectSchema.virtual('createdAtFormatted').get(function(this: IProject) {
@@ -410,6 +386,45 @@ ProjectSchema.virtual('completionPercentage').get(function(this: IProject) {
   if (this.totalTasks === 0) return 0;
   return Math.round((this.completedTasks / this.totalTasks) * 100);
 });
+
+// Method to add a member to the project
+ProjectSchema.methods.addMember = function(this: IProject, userId: string, role: "Viewer" | "Contributor" | "Admin" = "Contributor") {
+  const existingMemberIndex = this.members.findIndex(m => m.userId === userId);
+  
+  if (existingMemberIndex !== -1) {
+    // Update existing member's role
+    this.members[existingMemberIndex].role = role;
+    this.members[existingMemberIndex].addedAt = new Date();
+  } else {
+    // Add new member
+    this.members.push({
+      userId,
+      role,
+      addedAt: new Date()
+    });
+  }
+  
+  return this.save();
+};
+
+// Method to remove a member from the project
+ProjectSchema.methods.removeMember = function(this: IProject, userId: string) {
+  const memberIndex = this.members.findIndex(m => m.userId === userId);
+  
+  if (memberIndex === -1) {
+    throw new Error("Member not found");
+  }
+  
+  this.members.splice(memberIndex, 1);
+  
+  // Ensure at least one admin remains
+  const hasAdmin = this.members.some(member => member.role === 'Admin');
+  if (!hasAdmin && this.members.length > 0) {
+    this.members[0].role = 'Admin';
+  }
+  
+  return this.save();
+};
 
 // Method to update task counts
 ProjectSchema.methods.updateTaskCounts = async function(this: IProject, completedTasks: number, totalTasks: number) {
@@ -470,6 +485,12 @@ ProjectSchema.methods.addTask = function(this: IProject, taskData: Partial<ITask
     this.completedTasks += 1;
   }
   
+  // Update assigneeIds if task has an assignee
+  if (newTask.assigneeId && !this.assigneeIds?.includes(newTask.assigneeId)) {
+    if (!this.assigneeIds) this.assigneeIds = [];
+    this.assigneeIds.push(newTask.assigneeId);
+  }
+  
   // If task has sprintId, update sprint metrics
   if (newTask.sprintId) {
     const sprintIndex = this.sprints.findIndex(
@@ -502,6 +523,7 @@ ProjectSchema.methods.updateTask = function(this: IProject, taskId: string | Typ
   const oldSprintId = oldTask.sprintId;
   const oldStatus = oldTask.status;
   const oldStoryPoints = oldTask.storyPoints || 0;
+  const oldAssigneeId = oldTask.assigneeId;
   
   // Update task properties
   const updatedTask = {
@@ -527,6 +549,7 @@ ProjectSchema.methods.updateTask = function(this: IProject, taskId: string | Typ
   const newSprintId = newTask.sprintId;
   const newStatus = newTask.status;
   const newStoryPoints = newTask.storyPoints || 0;
+  const newAssigneeId = newTask.assigneeId;
   
   // Update project task counts if status changed
   if (oldStatus !== newStatus) {
@@ -534,6 +557,24 @@ ProjectSchema.methods.updateTask = function(this: IProject, taskId: string | Typ
       this.completedTasks = Math.max(0, this.completedTasks - 1);
     } else if (oldStatus !== "Done" && newStatus === "Done") {
       this.completedTasks += 1;
+    }
+  }
+  
+  // Update assigneeIds if assignee changed
+  if (oldAssigneeId !== newAssigneeId) {
+    // Remove old assignee if no other tasks are assigned to them
+    if (oldAssigneeId) {
+      const hasOtherTasks = this.tasks.some((t: ITask, idx: number) => 
+        idx !== taskIndex && t.assigneeId === oldAssigneeId
+      );
+      if (!hasOtherTasks && this.assigneeIds) {
+        this.assigneeIds = this.assigneeIds.filter(id => id !== oldAssigneeId);
+      }
+    }
+    
+    // Add new assignee if not already in assigneeIds
+    if (newAssigneeId && this.assigneeIds && !this.assigneeIds.includes(newAssigneeId)) {
+      this.assigneeIds.push(newAssigneeId);
     }
   }
   
@@ -622,6 +663,14 @@ ProjectSchema.methods.deleteTask = function(this: IProject, taskId: string | Typ
   this.totalTasks = Math.max(0, this.totalTasks - 1);
   if (taskToDelete.status === "Done") {
     this.completedTasks = Math.max(0, this.completedTasks - 1);
+  }
+  
+  // Update assigneeIds if this was the last task for this assignee
+  if (taskToDelete.assigneeId) {
+    const hasOtherTasks = this.tasks.some((t: ITask) => t.assigneeId === taskToDelete.assigneeId);
+    if (!hasOtherTasks && this.assigneeIds) {
+      this.assigneeIds = this.assigneeIds.filter(id => id !== taskToDelete.assigneeId);
+    }
   }
   
   // Update sprint metrics if task was in a sprint

@@ -31,8 +31,6 @@ export default function ProjectCreationModal({
   const [projectFormData, setProjectFormData] = useState({
     name: "",
     key: "",
-    ownerId: "",
-    assigneeIds: [] as string[],
     description: "",
   });
 
@@ -42,8 +40,6 @@ export default function ProjectCreationModal({
       setProjectFormData({
         name: editingProject.name,
         key: editingProject.key,
-        ownerId: editingProject.ownerId,
-        assigneeIds: editingProject.assigneeIds || [],
         description: editingProject.description || "",
       });
       setEditingKey(false);
@@ -51,8 +47,6 @@ export default function ProjectCreationModal({
       setProjectFormData({
         name: "",
         key: "",
-        ownerId: "",
-        assigneeIds: [],
         description: "",
       });
     }
@@ -109,8 +103,6 @@ export default function ProjectCreationModal({
       const requestData = {
         name: projectFormData.name.trim(),
         key: projectFormData.key.toUpperCase(),
-        ownerId: "", // Empty string for owner
-        assigneeIds: [], // Empty array for assignees
         description: projectFormData.description,
       };
 

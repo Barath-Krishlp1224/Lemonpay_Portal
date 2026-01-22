@@ -42,7 +42,7 @@ export async function POST(req: Request) {
     employee.resetTokenExpiry = expiry;
     await employee.save();
 
-    const baseUrl = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
+    const baseUrl = process.env.NEXT_PUBLIC_APP_URL || "https://bitbucket.org/lemonpay/lp-unity/src/uat/app/api/forgot-password/route.ts";
     const resetUrl = `${baseUrl}/reset-password?token=${token}`;
 
     try {

@@ -3,13 +3,6 @@ import connectDB from "@/lib/mongodb";
 import Project from "@/models/Project";
 import mongoose from "mongoose";
 
-// Define member interface
-interface ProjectMember {
-  userId: any;
-  role: "Admin" | "Contributor";
-  addedAt: Date;
-}
-
 // GET: Fetch all projects
 export async function GET() {
   try {
@@ -30,10 +23,6 @@ export async function POST(req: NextRequest) {
     // Validate required fields
     if (!body.name || !body.name.trim()) {
       return NextResponse.json({ error: "Project name is required" }, { status: 400 });
-    }
-
-    if (!body.ownerId) {
-      return NextResponse.json({ error: "Project lead is required" }, { status: 400 });
     }
 
     // Check if Project Name already exists (Case Insensitive)
@@ -89,38 +78,15 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Prepare members array with owner as Admin
-    const members: ProjectMember[] = [
-      {
-        userId: body.ownerId,
-        role: "Admin",
-        addedAt: new Date()
-      }
-    ];
-
-    // Add assignees as Contributors
-    if (body.assigneeIds && Array.isArray(body.assigneeIds)) {
-      for (const assigneeId of body.assigneeIds) {
-        if (assigneeId !== body.ownerId) { // Don't add owner twice
-          members.push({
-            userId: assigneeId,
-            role: "Contributor",
-            addedAt: new Date()
-          });
-        }
-      }
-    }
-
-    // Create project
+    // Create project without ownerId
     const newProject = await Project.create({
       name: body.name.trim(),
       key: normalizedKey,
-      ownerId: body.ownerId,
-      assigneeIds: body.assigneeIds || [], // Include assigneeIds
       description: body.description || "",
-      members: members,
       visibility: "PRIVATE",
       status: "Active",
+      // Members array will be empty initially, can be added later
+      members: []
     });
 
     return NextResponse.json(newProject, { status: 201 });
@@ -194,32 +160,6 @@ export async function PUT(req: NextRequest) {
       updateData.key = normalizedKey;
     }
 
-    // Handle assigneeIds update - update members array accordingly
-    if (updateData.assigneeIds && Array.isArray(updateData.assigneeIds)) {
-      // Start with owner as Admin
-      const updatedMembers: ProjectMember[] = [
-        {
-          userId: updateData.ownerId || existingProject.ownerId,
-          role: "Admin",
-          addedAt: new Date()
-        }
-      ];
-
-      // Add assignees as Contributors
-      for (const assigneeId of updateData.assigneeIds) {
-        const isOwner = assigneeId === (updateData.ownerId || existingProject.ownerId);
-        if (!isOwner) { // Don't add owner twice
-          updatedMembers.push({
-            userId: assigneeId,
-            role: "Contributor",
-            addedAt: new Date()
-          });
-        }
-      }
-
-      updateData.members = updatedMembers;
-    }
-
     // Update project
     const updatedProject = await Project.findByIdAndUpdate(
       _id,
@@ -241,45 +181,121 @@ export async function PUT(req: NextRequest) {
   }
 }
 
-// DELETE: Remove a project
+// DELETE: Remove a project OR remove a member from project
 export async function DELETE(req: NextRequest) {
   try {
     await connectDB();
     const { searchParams } = new URL(req.url);
     const id = searchParams.get("id");
+    const userId = searchParams.get("userId");
 
-    if (!id || !mongoose.Types.ObjectId.isValid(id)) {
-      return NextResponse.json({ error: "Invalid Project ID" }, { status: 400 });
+    // Handle member removal if userId is provided
+    if (userId) {
+      if (!id || !mongoose.Types.ObjectId.isValid(id)) {
+        return NextResponse.json({ error: "A valid Project ID is required" }, { status: 400 });
+      }
+
+      // Check if project exists
+      const project = await Project.findById(id);
+      if (!project) {
+        return NextResponse.json({ error: "Project not found" }, { status: 404 });
+      }
+
+      // Check if user is a member
+      const memberIndex = project.members.findIndex((m: any) => m.userId === userId);
+      if (memberIndex === -1) {
+        return NextResponse.json({ error: "Member not found in project" }, { status: 404 });
+      }
+
+      // Remove member
+      project.members.splice(memberIndex, 1);
+
+      // Ensure at least one admin remains
+      const hasAdmin = project.members.some((m: any) => m.role === 'Admin');
+      if (!hasAdmin && project.members.length > 0) {
+        project.members[0].role = 'Admin';
+      }
+
+      await project.save();
+      return NextResponse.json({ 
+        message: "Member removed successfully",
+        projectId: id,
+        userId: userId
+      }, { status: 200 });
+    }
+    // Otherwise, handle project deletion
+    else {
+      if (!id || !mongoose.Types.ObjectId.isValid(id)) {
+        return NextResponse.json({ error: "Invalid Project ID" }, { status: 400 });
+      }
+
+      // Check if project exists
+      const project = await Project.findById(id);
+      if (!project) {
+        return NextResponse.json({ error: "Project not found" }, { status: 404 });
+      }
+
+      const deleted = await Project.findByIdAndDelete(id);
+      if (!deleted) {
+        return NextResponse.json({ error: "Failed to delete project" }, { status: 500 });
+      }
+
+      return NextResponse.json({ 
+        message: "Project deleted successfully",
+        deletedId: id 
+      }, { status: 200 });
+    }
+  } catch (error: any) {
+    console.error("Delete error:", error);
+    return NextResponse.json({ error: error.message }, { status: 500 });
+  }
+}
+
+// PATCH: Add member to project or update member role
+export async function PATCH(req: NextRequest) {
+  try {
+    await connectDB();
+    const body = await req.json();
+    const { projectId, userId, role = "Contributor" } = body;
+
+    if (!projectId || !mongoose.Types.ObjectId.isValid(projectId)) {
+      return NextResponse.json({ error: "A valid Project ID is required" }, { status: 400 });
+    }
+
+    if (!userId) {
+      return NextResponse.json({ error: "User ID is required" }, { status: 400 });
+    }
+
+    if (!["Viewer", "Contributor", "Admin"].includes(role)) {
+      return NextResponse.json({ error: "Invalid role" }, { status: 400 });
     }
 
     // Check if project exists
-    const project = await Project.findById(id);
+    const project = await Project.findById(projectId);
     if (!project) {
       return NextResponse.json({ error: "Project not found" }, { status: 404 });
     }
 
-    // Optional: Check if project has any epics before deletion
-    // You might want to add this check if you have an Epic model
-    // const Epic = (await import("@/models/Epic")).default;
-    // const epicCount = await Epic.countDocuments({ projectId: id });
-    // if (epicCount > 0) {
-    //   return NextResponse.json(
-    //     { error: "Cannot delete project that has epics. Please delete the epics first." },
-    //     { status: 400 }
-    //   );
-    // }
-
-    const deleted = await Project.findByIdAndDelete(id);
-    if (!deleted) {
-      return NextResponse.json({ error: "Failed to delete project" }, { status: 500 });
+    // Check if user is already a member
+    const existingMemberIndex = project.members.findIndex((m: any) => m.userId === userId);
+    
+    if (existingMemberIndex !== -1) {
+      // Update existing member's role
+      project.members[existingMemberIndex].role = role;
+      project.members[existingMemberIndex].addedAt = new Date();
+    } else {
+      // Add new member
+      project.members.push({
+        userId,
+        role,
+        addedAt: new Date()
+      });
     }
 
-    return NextResponse.json({ 
-      message: "Project deleted successfully",
-      deletedId: id 
-    }, { status: 200 });
+    await project.save();
+    return NextResponse.json(project, { status: 200 });
   } catch (error: any) {
-    console.error("Project deletion error:", error);
+    console.error("Add/update member error:", error);
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }

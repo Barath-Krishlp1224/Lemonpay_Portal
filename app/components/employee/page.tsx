@@ -10,6 +10,7 @@ import {
   Umbrella, 
   Palmtree, 
   ReceiptText,
+  FileText,
   LucideIcon 
 } from "lucide-react";
 import { useRouter } from "next/navigation";
@@ -69,6 +70,16 @@ export default function EmptyPage() {
       // UPDATED ROUTE BELOW
       route: "/components/employee/task",
     },
+    {
+      id: 4,
+      title: "Bug Creation",
+      description: "Access your files and reports",
+      icon: FileText,
+      color: "from-amber-500 to-amber-600",
+      hoverColor: "hover:from-amber-600 hover:to-amber-700",
+      gradient: "bg-amber-50",
+      route: "/components/qa",
+    },
   ];
 
   // Alphabetically ordered sub-menu items
@@ -94,7 +105,7 @@ export default function EmptyPage() {
         </div>
 
         {/* Main Menu Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-8 mb-12">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-8 mb-12">
           {menuItems.map((item, index) => {
             const Icon = item.icon;
             return (

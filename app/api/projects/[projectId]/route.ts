@@ -6,7 +6,7 @@ import mongoose from "mongoose";
 // Define member interface
 interface ProjectMember {
   userId: any;
-  role: "Admin" | "Contributor";
+  role: "Admin" | "Contributor" | "Viewer";
   addedAt: Date;
 }
 
@@ -127,27 +127,66 @@ export async function PUT(
 
     // Handle assigneeIds update - update members array accordingly
     if (updateData.assigneeIds && Array.isArray(updateData.assigneeIds)) {
-      // Start with owner as Admin
-      const updatedMembers: ProjectMember[] = [
-        {
-          userId: updateData.ownerId || existingProject.ownerId,
-          role: "Admin",
-          addedAt: new Date()
-        }
-      ];
-
-      // Add assignees as Contributors
-      for (const assigneeId of updateData.assigneeIds) {
-        const isOwner = assigneeId === (updateData.ownerId || existingProject.ownerId);
-        if (!isOwner) { // Don't add owner twice
+      // Get existing admin members to preserve them
+      const existingAdmins = existingProject.members.filter((member: ProjectMember) => 
+        member.role === "Admin"
+      );
+      
+      // Create updated members array
+      const updatedMembers: ProjectMember[] = [];
+      
+      // First, preserve existing Admins
+      existingAdmins.forEach((admin: ProjectMember) => {
+        // Only keep admin if they're still in assigneeIds or if they're a member
+        if (updateData.assigneeIds.includes(admin.userId) || 
+            existingProject.members.some((m: ProjectMember) => m.userId === admin.userId)) {
           updatedMembers.push({
-            userId: assigneeId,
-            role: "Contributor",
-            addedAt: new Date()
+            userId: admin.userId,
+            role: "Admin",
+            addedAt: admin.addedAt || new Date()
           });
         }
+      });
+      
+      // Add assignees as Contributors (if not already an Admin)
+      for (const assigneeId of updateData.assigneeIds) {
+        const isAlreadyAdmin = updatedMembers.some(member => 
+          member.userId === assigneeId && member.role === "Admin"
+        );
+        const isExistingMember = existingProject.members.some((member: ProjectMember) => 
+          member.userId === assigneeId
+        );
+        
+        if (!isAlreadyAdmin) {
+          // Check if this user is already a member with a role
+          const existingMember = existingProject.members.find((member: ProjectMember) => 
+            member.userId === assigneeId
+          );
+          
+          if (existingMember) {
+            // Keep existing role unless it's Viewer (upgrade to Contributor)
+            updatedMembers.push({
+              userId: assigneeId,
+              role: existingMember.role === "Viewer" ? "Contributor" : existingMember.role,
+              addedAt: existingMember.addedAt || new Date()
+            });
+          } else {
+            // New member, add as Contributor
+            updatedMembers.push({
+              userId: assigneeId,
+              role: "Contributor",
+              addedAt: new Date()
+            });
+          }
+        }
       }
-
+      
+      // Ensure at least one Admin remains
+      const hasAdmin = updatedMembers.some(member => member.role === "Admin");
+      if (!hasAdmin && updatedMembers.length > 0) {
+        updatedMembers[0].role = "Admin";
+      }
+      
       updateData.members = updatedMembers;
     }
 

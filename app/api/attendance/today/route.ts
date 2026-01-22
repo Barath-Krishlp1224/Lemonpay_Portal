@@ -23,18 +23,18 @@ function getTodayISTDateString(): string {
 }
 
 /**
- * API to fetch the attendance record for a specific employee and mode for today.
+ * API to fetch the attendance record for a specific employee for today.
  */
 export async function POST(req: Request) {
   try {
     await connectDB();
 
     const body = await req.json();
-    const { employeeId, mode } = body;
+    const { employeeId } = body;
 
-    if (!employeeId || !mode) {
+    if (!employeeId) {
       return NextResponse.json(
-        { error: "employeeId and mode are required." },
+        { error: "employeeId is required." },
         { status: 400 }
       );
     }
@@ -45,9 +45,8 @@ export async function POST(req: Request) {
     const record = await Attendance.findOne({
       employeeId,
       date: todayDateStr,
-      mode: mode,
     }).select(
-      "employeeId date mode punchInTime punchOutTime punchInMode punchOutMode punchInLatitude punchInLongitude punchOutLatitude punchOutLongitude"
+      "employeeId date punchInTime punchOutTime punchInLatitude punchInLongitude punchOutLatitude punchOutLongitude punchInBranch punchOutBranch"
     );
 
     return NextResponse.json({

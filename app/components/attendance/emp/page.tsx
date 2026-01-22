@@ -1,50 +1,105 @@
 "use client";
 
-import React, { useEffect, useRef, useState, useCallback } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import {
-  Camera,
-  MapPin,
-  Clock,
-  User,
   Calendar,
-  Send,
-  RotateCcw,
   LogIn,
   LogOut,
   CheckCircle2,
+  RotateCcw,
+  Camera,
+  MapPin,
+  UserCheck,
+  Activity,
+  CalendarDays,
+  TrendingUp,
+  Target,
+  Clock,
+  AlertCircle,
+  Filter,
+  ChevronDown,
+  ChevronUp
 } from "lucide-react";
 
+const TOTAL_WORK_DAYS = 320;
+const TOTAL_LIMIT = 12;
+
 type PunchType = "IN" | "OUT";
-type AttendanceMode = "IN_OFFICE" | "WORK_FROM_HOME" | "ON_DUTY" | "REGULARIZATION";
 
 const BRANCHES = [
   { id: "saaram", name: "LP-Saaram Pondy", lat: 11.939198361614558, lon: 79.81654494108358, radius: 150 },
-  { id: "tidel", name: "LP-Tidel Villupuram", lat: 11.995967441546023, lon: 79.76744798792814, radius: 2000 } 
+  { id: "tidel", name: "LP-Tidel Villupuram", lat: 11.995967441546023, lon: 79.7674479892814, radius: 2000 }
 ];
 
 const getDistance = (lat1: number, lon1: number, lat2: number, lon2: number) => {
-  const R = 6371e3; 
+  const R = 6371e3;
   const φ1 = (lat1 * Math.PI) / 180;
   const φ2 = (lat2 * Math.PI) / 180;
   const Δφ = ((lat2 - lat1) * Math.PI) / 180;
   const Δλ = ((lon2 - lon1) * Math.PI) / 180;
   const a = Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
-            Math.cos(φ1) * Math.cos(φ2) *
-            Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
+    Math.cos(φ1) * Math.cos(φ2) *
+    Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  return R * c; 
+  return R * c;
 };
+
+// FIXED: Improved time formatting to handle ISO strings and existing time strings
+const formatTime = (timeStr?: string) => {
+  if (!timeStr) return "--:--";
+  try {
+    const date = new Date(timeStr);
+    // If the string isn't a valid date (like "09:30 AM"), return the string itself
+    if (isNaN(date.getTime())) return timeStr; 
+    
+    return date.toLocaleTimeString([], {
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: true
+    });
+  } catch (e) {
+    return timeStr || "--:--";
+  }
+};
+
+const formatDateTime = (timeStr?: string) => {
+  if (!timeStr) return "--:-- --";
+  try {
+    const date = new Date(timeStr);
+    if (isNaN(date.getTime())) return timeStr;
+
+    return date.toLocaleTimeString([], {
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: true
+    });
+  } catch (e) {
+    return timeStr || "--:-- --";
+  }
+};
+
+const formatDate = (dateStr: string) => {
+  try {
+    const date = new Date(dateStr);
+    if (isNaN(date.getTime())) return dateStr;
+    return date.toLocaleDateString('en-GB', { 
+      day: '2-digit', 
+      month: 'short', 
+      year: 'numeric' 
+    });
+  } catch (e) {
+    return dateStr;
+  }
+};
+
+type FilterType = "lastDay" | "lastWeek" | "lastMonth" | "custom" | "all";
 
 const AttendancePage = () => {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-
-  const [employeeId, setEmployeeId] = useState<string | null>(null);
-  const [name, setName] = useState<string | null>(null);
   const [record, setRecord] = useState<any>(null);
   const [loadingRecord, setLoadingRecord] = useState(true);
   const [punchType, setPunchType] = useState<PunchType | null>(null);
-  const [mode, setMode] = useState<AttendanceMode>("IN_OFFICE");
   const [selectedBranch, setSelectedBranch] = useState(BRANCHES[0]);
   const [isCameraReady, setIsCameraReady] = useState(false);
   const [location, setLocation] = useState<{ lat: number | null; lng: number | null }>({ lat: null, lng: null });
@@ -52,69 +107,83 @@ const AttendancePage = () => {
   const [submitStatus, setSubmitStatus] = useState<string | null>(null);
   const [submitLoading, setSubmitLoading] = useState(false);
   const [isConfirming, setIsConfirming] = useState(false);
+  const [attendanceHistory, setAttendanceHistory] = useState<any[]>([]);
+  const [empIdOrEmail, setEmpIdOrEmail] = useState("");
+  const [employeeName, setEmployeeName] = useState("Loading...");
+  const [leaveSummary, setLeaveSummary] = useState({ sick: 12, casual: 12, plannedRequests: 0, unplannedRequests: 0 });
+  const [userRequests, setUserRequests] = useState<any[]>([]);
+  const [selectedFilter, setSelectedFilter] = useState<FilterType>("all");
+  const [showCustomDatePicker, setShowCustomDatePicker] = useState(false);
+  const [customStartDate, setCustomStartDate] = useState("");
+  const [customEndDate, setCustomEndDate] = useState("");
+  const [sickTaken, setSickTaken] = useState(0);
+  const [casualTaken, setCasualTaken] = useState(0);
 
-  const formatTime = (val?: string) => {
-    if (!val) return "—";
-    const d = new Date(val);
-    return isNaN(d.getTime()) ? "—" : d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  };
-
-  const getModeLabel = (m: AttendanceMode) => {
-    const labels: Record<string, string> = {
-      IN_OFFICE: "In Office",
-      WORK_FROM_HOME: "Work From Home",
-      ON_DUTY: "On Duty",
-      REGULARIZATION: "Regularization"
-    };
-    return labels[m] || m;
-  };
-
-  const loadTodayAttendance = useCallback(async (empId: string, currentMode: AttendanceMode) => {
-    setLoadingRecord(true);
+  const refreshData = async (id: string) => {
+    if (!id) return;
     try {
-      const res = await fetch("/api/attendance/today", {
+      const todayRes = await fetch("/api/attendance/today", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ employeeId: empId, mode: currentMode }),
+        body: JSON.stringify({ employeeId: id }),
       });
-      const json = await res.json();
-      setRecord(json.record || null);
-    } catch (e) {
-      console.error("Load Error:", e);
+      const todayJson = await todayRes.json();
+      // Ensure we map punchInTime/punchOutTime correctly from the record
+      setRecord(todayJson.record || null);
+
+      const attendanceRes = await fetch(`/api/attendance?empId=${encodeURIComponent(id)}`);
+      if (attendanceRes.ok) {
+        const attData = await attendanceRes.json();
+        setAttendanceHistory(attData.attendances || []);
+      }
+
+      const balanceRes = await fetch(`/api/leaves?empIdOrEmail=${encodeURIComponent(id)}`);
+      if (balanceRes.ok) {
+        const leaveData = await balanceRes.json();
+        setLeaveSummary(leaveData);
+        setSickTaken(TOTAL_LIMIT - leaveData.sick);
+        setCasualTaken(TOTAL_LIMIT - leaveData.casual);
+      }
+
+      const historyRes = await fetch(`/api/leaves?empIdOrEmail=${encodeURIComponent(id)}&mode=list`);
+      const historyData = await historyRes.json();
+      if (Array.isArray(historyData)) setUserRequests(historyData);
+
+    } catch (error) {
+      console.error("Data loading error:", error);
     } finally {
       setLoadingRecord(false);
+    }
+  };
+
+  useEffect(() => {
+    const id = localStorage.getItem("userEmpId");
+    const name = localStorage.getItem("userName");
+    if (id) {
+      setEmpIdOrEmail(id);
+      setEmployeeName(name || id);
+      refreshData(id);
     }
   }, []);
 
   useEffect(() => {
-    setEmployeeId(localStorage.getItem("userEmpId"));
-    setName(localStorage.getItem("userName"));
-  }, []);
-
-  useEffect(() => {
-    if (employeeId) loadTodayAttendance(employeeId, mode);
-  }, [employeeId, mode, loadTodayAttendance]);
-
-  useEffect(() => {
-    // Logic to determine if user needs to punch IN, OUT, or if they are DONE
     if (record?.punchInTime && !record.punchOutTime) {
       setPunchType("OUT");
     } else if (record?.punchInTime && record.punchOutTime) {
-      setPunchType(null); // Shift complete
+      setPunchType(null);
     } else {
       setPunchType("IN");
     }
   }, [record]);
 
   useEffect(() => {
-    // Don't start camera if shift is already completed
     if (record?.punchInTime && record.punchOutTime) return;
 
     const startCamera = async () => {
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({ 
-            video: { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 } }, 
-            audio: false 
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 } },
+          audio: false
         });
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
@@ -131,7 +200,7 @@ const AttendancePage = () => {
     return () => {
       if (videoRef.current?.srcObject) (videoRef.current.srcObject as MediaStream).getTracks().forEach(t => t.stop());
     };
-  }, [record]); // Re-run if record changes to cleanup/start camera
+  }, [record]);
 
   useEffect(() => {
     if (!navigator.geolocation) return;
@@ -144,9 +213,9 @@ const AttendancePage = () => {
   }, []);
 
   const handleCapture = () => {
-    if (!videoRef.current || !canvasRef.current || !employeeId) return;
-    
-    if (mode === "IN_OFFICE" && location.lat && location.lng) {
+    if (!videoRef.current || !canvasRef.current || !empIdOrEmail) return;
+
+    if (location.lat && location.lng) {
       const distance = getDistance(location.lat, location.lng, selectedBranch.lat, selectedBranch.lon);
       if (distance > selectedBranch.radius) {
         setSubmitStatus(`❌ Failed: Outside branch area (${Math.round(distance)}m).`);
@@ -160,12 +229,12 @@ const AttendancePage = () => {
     canvas.height = video.videoHeight;
     const ctx = canvas.getContext("2d");
     if (ctx) {
-        ctx.translate(canvas.width, 0);
-        ctx.scale(-1, 1);
-        ctx.drawImage(video, 0, 0);
-        setPreviewImage(canvas.toDataURL("image/jpeg", 0.8));
-        setIsConfirming(true);
-        setSubmitStatus(null);
+      ctx.translate(canvas.width, 0);
+      ctx.scale(-1, 1);
+      ctx.drawImage(video, 0, 0);
+      setPreviewImage(canvas.toDataURL("image/jpeg", 0.8));
+      setIsConfirming(true);
+      setSubmitStatus(null);
     }
   };
 
@@ -176,20 +245,19 @@ const AttendancePage = () => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          employeeId: employeeId?.trim(),
-          employeeName: name,
+          employeeId: empIdOrEmail?.trim(),
+          employeeName: employeeName,
           imageData: previewImage,
           latitude: location.lat,
           longitude: location.lng,
           punchType,
-          mode,
-          branch: selectedBranch.name 
+          branch: selectedBranch.name
         }),
       });
 
       if (res.ok) {
-        setSubmitStatus(`Success! Recorded at ${selectedBranch.name} ✅`);
-        if (employeeId) await loadTodayAttendance(employeeId, mode);
+        setSubmitStatus(`Success! Recorded ✅`);
+        if (empIdOrEmail) refreshData(empIdOrEmail);
         setIsConfirming(false);
         setPreviewImage(null);
       } else {
@@ -203,187 +271,279 @@ const AttendancePage = () => {
     }
   };
 
+  const filteredAttendance = useMemo(() => {
+    let filtered = attendanceHistory;
+    const now = new Date();
+
+    switch (selectedFilter) {
+      case "lastDay":
+        const yesterday = new Date(now);
+        yesterday.setDate(yesterday.getDate() - 1);
+        filtered = attendanceHistory.filter(att => new Date(att.date) >= yesterday);
+        break;
+      case "lastWeek":
+        const lastWeek = new Date(now);
+        lastWeek.setDate(lastWeek.getDate() - 7);
+        filtered = attendanceHistory.filter(att => new Date(att.date) >= lastWeek);
+        break;
+      case "lastMonth":
+        const lastMonth = new Date(now);
+        lastMonth.setMonth(lastMonth.getMonth() - 1);
+        filtered = attendanceHistory.filter(att => new Date(att.date) >= lastMonth);
+        break;
+      case "custom":
+        if (customStartDate && customEndDate) {
+          const start = new Date(customStartDate);
+          const end = new Date(customEndDate);
+          end.setHours(23, 59, 59, 999);
+          filtered = attendanceHistory.filter(att => {
+            const attDate = new Date(att.date);
+            return attDate >= start && attDate <= end;
+          });
+        }
+        break;
+      default:
+        break;
+    }
+
+    return [...filtered].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+  }, [attendanceHistory, selectedFilter, customStartDate, customEndDate]);
+
+  const annualStats = useMemo(() => {
+    const presentCount = attendanceHistory.filter(a => a.present).length;
+    const totalApproved = userRequests
+      .filter(req => req.status === 'approved' || req.status === 'auto-approved')
+      .reduce((acc, req) => acc + req.days, 0);
+
+    return {
+      totalTaken: totalApproved,
+      presentCount,
+      sickTaken,
+      casualTaken,
+      attendanceProgress: (presentCount / TOTAL_WORK_DAYS) * 100,
+      leaveImpact: (totalApproved / TOTAL_WORK_DAYS) * 100,
+      sickProgress: (sickTaken / TOTAL_LIMIT) * 100,
+      casualProgress: (casualTaken / TOTAL_LIMIT) * 100
+    };
+  }, [leaveSummary, userRequests, attendanceHistory, sickTaken, casualTaken]);
+
+  const handleCustomDateApply = () => {
+    if (customStartDate && customEndDate) {
+      setSelectedFilter("custom");
+      setShowCustomDatePicker(false);
+    }
+  };
+
+  const handleFilterChange = (filter: FilterType) => {
+    setSelectedFilter(filter);
+    if (filter !== "custom") {
+      setShowCustomDatePicker(false);
+    } else {
+      setShowCustomDatePicker(true);
+    }
+  };
+
   const isShiftComplete = !!(record?.punchInTime && record?.punchOutTime);
 
-  const ConfirmationModal = () => (
-    <div className="fixed inset-0 bg-black/60 backdrop-blur-md flex items-center justify-center z-[100] p-4">
-      <div className="bg-white rounded-3xl shadow-2xl max-w-md w-full p-6 animate-in fade-in zoom-in duration-300">
-        <div className="text-center mb-6">
-          <div className="w-16 h-16 bg-blue-50 rounded-full flex items-center justify-center mx-auto mb-4 border-2 border-blue-100">
-            <User className="w-8 h-8 text-blue-600" />
-          </div>
-          <h2 className="text-xl font-bold text-black">Verify & Submit</h2>
-        </div>
-
-        <div className="bg-gray-50 rounded-2xl p-4 mb-6 space-y-3">
-          <div className="flex justify-between items-center text-sm">
-            <span className="text-black font-medium">Action</span>
-            <span className={`font-bold px-2 py-1 rounded text-xs ${punchType === 'IN' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
-              {punchType === 'IN' ? 'Check In' : 'Check Out'}
-            </span>
-          </div>
-          <div className="flex justify-between items-center text-sm">
-            <span className="text-black font-medium">Mode</span>
-            <span className="font-bold text-black">{getModeLabel(mode)}</span>
-          </div>
-          <div className="flex justify-between items-center text-sm">
-            <span className="text-black font-medium">Branch</span>
-            <span className="font-bold text-black">{selectedBranch.name}</span>
-          </div>
-        </div>
-
-        {previewImage && <img src={previewImage} className="w-full h-40 object-cover rounded-xl mb-6 shadow-sm" alt="Captured" />}
-
-        <div className="grid grid-cols-1 gap-2">
-          <button onClick={handleConfirmSubmit} disabled={submitLoading} className="w-full py-4 rounded-xl font-bold text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 flex items-center justify-center">
-            {submitLoading ? <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white" /> : <><Send className="w-4 h-4 mr-2" /> Submit Now</>}
-          </button>
-          <button onClick={() => { setIsConfirming(false); setPreviewImage(null); }} disabled={submitLoading} className="w-full py-3 rounded-xl font-bold text-black bg-gray-100 hover:bg-gray-200">
-            Retake
-          </button>
-        </div>
-      </div>
-    </div>
-  );
+  if (!empIdOrEmail) return <div className="p-20 text-center font-bold text-black italic">Loading Attendance System...</div>;
 
   return (
-    <div className="min-h-screen bg-[#F8FAFC]">
-      {isConfirming && <ConfirmationModal />}
-      
-      <div className="max-w-7xl mx-auto px-4 py-8">
-        <header className="mb-8 flex items-center justify-between">
-            <div>
-                <h1 className="text-2xl font-black text-black tracking-tight">TimeTrack <span className="text-blue-600">Pro</span></h1>
-                <p className="text-black font-medium text-sm">{name || 'Employee'}</p>
-            </div>
-            <div className="flex items-center bg-white p-2 rounded-xl shadow-sm border border-gray-100">
-                <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center text-white font-bold text-xs">
-                    {name?.charAt(0) || 'U'}
-                </div>
-                <div className="ml-3 pr-2">
-                    <p className="text-xs font-bold text-black">{employeeId}</p>
-                </div>
-            </div>
-        </header>
-
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-          <div className="lg:col-span-4 space-y-6">
-            <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
-              <label className="text-xs font-bold text-black uppercase tracking-widest mb-4 block">Branch</label>
-              <select 
-                disabled={isShiftComplete}
-                className="w-full p-3 bg-gray-50 border-2 border-transparent focus:border-blue-500 rounded-xl text-black font-bold outline-none transition-all disabled:opacity-50" 
-                value={selectedBranch.id} 
-                onChange={(e) => setSelectedBranch(BRANCHES.find(b => b.id === e.target.value) || BRANCHES[0])} 
-              >
-                {BRANCHES.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
-              </select>
-            </div>
-
-            <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
-              <label className="text-xs font-bold text-black uppercase tracking-widest mb-4 block">Work Mode</label>
-              <div className="grid grid-cols-1 gap-2">
-                {['IN_OFFICE', 'WORK_FROM_HOME', 'ON_DUTY'].map((m) => (
-                  <button
-                    key={m}
-                    disabled={isShiftComplete}
-                    onClick={() => setMode(m as AttendanceMode)}
-                    className={`p-3 rounded-xl text-left font-bold border-2 transition-all ${mode === m ? 'bg-blue-50 border-blue-500 text-blue-700' : 'bg-white border-gray-100 text-black'} disabled:opacity-50`}
-                  >
-                    {getModeLabel(m as AttendanceMode)}
-                  </button>
-                ))}
+    <div className="min-h-screen bg-[#F8FAFC] text-black">
+      {/* Confirmation Modal */}
+      {isConfirming && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[100] p-4">
+          <div className="bg-white rounded-3xl shadow-2xl max-w-md w-full p-6 animate-in fade-in zoom-in duration-300">
+            <div className="text-center mb-6">
+              <div className="w-16 h-16 bg-blue-50 rounded-full flex items-center justify-center mx-auto mb-4 border-2 border-blue-100">
+                <Camera className="w-8 h-8 text-blue-600" />
               </div>
+              <h2 className="text-xl font-bold">Confirm Punch</h2>
             </div>
-
-            <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
-              <h3 className="text-xs font-bold text-black uppercase tracking-widest mb-4 block">Log Summary</h3>
-              {loadingRecord ? <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-600 mx-auto" /> : (
-                <div className="space-y-2 text-sm">
-                  <div className="flex justify-between p-3 bg-gray-50 rounded-xl">
-                    <div className="flex items-center gap-2">
-                      <LogIn className="w-4 h-4 text-green-600" />
-                      <span className="text-black">Check In</span>
-                    </div>
-                    <span className="font-bold text-black">{formatTime(record?.punchInTime)}</span>
-                  </div>
-                  <div className="flex justify-between p-3 bg-gray-50 rounded-xl">
-                    <div className="flex items-center gap-2">
-                      <LogOut className="w-4 h-4 text-red-600" />
-                      <span className="text-black">Check Out</span>
-                    </div>
-                    <span className="font-bold text-black">{formatTime(record?.punchOutTime)}</span>
-                  </div>
-                </div>
-              )}
+            {previewImage && <img src={previewImage} className="w-full h-48 object-cover rounded-2xl mb-6 shadow-md" alt="Captured" />}
+            <div className="space-y-3">
+              <button onClick={handleConfirmSubmit} disabled={submitLoading} className="w-full py-4 rounded-xl font-bold text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 flex items-center justify-center transition-all">
+                {submitLoading ? <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white" /> : 'Confirm & Submit'}
+              </button>
+              <button onClick={() => { setIsConfirming(false); setPreviewImage(null); }} disabled={submitLoading} className="w-full py-3 rounded-xl font-bold text-gray-500 bg-gray-100 hover:bg-gray-200 transition-all">
+                Retake
+              </button>
             </div>
           </div>
+        </div>
+      )}
 
-          <div className="lg:col-span-8">
-            <div className="bg-white rounded-[2rem] shadow-xl border border-gray-100 p-6 md:p-10 h-full flex flex-col">
+      <div className="max-w-[1600px] mx-auto px-6 py-8">
+        <div className="mt-20"></div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-stretch">
+          <div className="lg:col-span-5 space-y-6">
+            <div className="bg-white rounded-[2rem] border border-slate-200 shadow-sm p-6 flex flex-col min-h-[500px]">
               {isShiftComplete ? (
-                /* SHIFT COMPLETED VIEW */
-                <div className="flex-1 flex flex-col items-center justify-center text-center p-8 bg-green-50 rounded-[1.5rem] border-2 border-dashed border-green-200 animate-in fade-in zoom-in duration-500">
+                <div className="flex-1 flex flex-col items-center justify-center text-center bg-green-50/50 rounded-[1.5rem] border-2 border-dashed border-green-100 p-8">
                   <div className="w-20 h-20 bg-green-100 rounded-full flex items-center justify-center mb-6">
                     <CheckCircle2 className="w-10 h-10 text-green-600" />
                   </div>
-                  <h2 className="text-3xl font-black text-green-900 mb-2">SHIFT COMPLETED</h2>
-                  <p className="text-green-700 font-medium max-w-sm">
-                    Great job! You have successfully recorded both Check-In and Check-Out for today.
-                  </p>
-                  <div className="mt-8 grid grid-cols-2 gap-4 w-full max-w-md">
-                    <div className="bg-white p-4 rounded-2xl shadow-sm">
-                      <p className="text-xs font-bold text-gray-400 uppercase">Total Hours</p>
-                      <p className="text-xl font-black text-black">Completed</p>
-                    </div>
-                    <div className="bg-white p-4 rounded-2xl shadow-sm">
-                      <p className="text-xs font-bold text-gray-400 uppercase">Status</p>
-                      <p className="text-xl font-black text-green-600">Present</p>
-                    </div>
-                  </div>
-                  <button 
-                    onClick={() => window.location.reload()}
-                    className="mt-8 flex items-center gap-2 text-green-700 font-bold hover:text-green-900 transition-colors"
-                  >
-                    <RotateCcw className="w-4 h-4" /> Refresh View
+                  <h2 className="text-2xl font-black text-green-900">SHIFT COMPLETE</h2>
+                  <p className="text-green-700 mt-2 font-medium">Both punches recorded for today.</p>
+                  <button onClick={() => window.location.reload()} className="mt-8 flex items-center gap-2 text-green-700 font-bold hover:bg-white px-5 py-2 rounded-full border border-green-200 transition-all">
+                    <RotateCcw className="w-4 h-4" /> Refresh
                   </button>
                 </div>
               ) : (
-                /* CAMERA VIEW */
                 <>
-                  <div className="relative flex-1 min-h-[450px] bg-gray-900 rounded-[1.5rem] overflow-hidden border-[8px] border-gray-50 shadow-inner">
+                  <div className="mb-6 space-y-4">
+                    <div className="flex items-center justify-between">
+                       <h2 className="text-lg font-bold">Mark Today's Attendance</h2>
+                       <div className="flex items-center gap-1.5 px-3 py-1 bg-blue-50 text-blue-700 rounded-lg text-xs font-bold border border-blue-100">
+                          <MapPin className="w-3 h-3" /> GPS ON
+                       </div>
+                    </div>
+                    <select 
+                      className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold outline-none"
+                      value={selectedBranch.id}
+                      onChange={(e) => setSelectedBranch(BRANCHES.find(b => b.id === e.target.value) || BRANCHES[0])}
+                    >
+                      {BRANCHES.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+                    </select>
+                  </div>
+
+                  <div className="relative flex-1 bg-slate-900 rounded-2xl overflow-hidden border-4 border-white shadow-lg">
                     <video ref={videoRef} className="w-full h-full object-cover scale-x-[-1]" autoPlay playsInline />
-                    <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                        <div className="w-72 h-72 border-2 border-white/20 rounded-full flex items-center justify-center">
-                            <div className="w-64 h-64 border-4 border-dashed border-blue-400/50 rounded-full" />
-                        </div>
-                    </div>
-                    <div className="absolute bottom-6 left-1/2 -translate-x-1/2 bg-black/40 backdrop-blur-md px-4 py-2 rounded-full">
-                       <p className="text-white text-xs font-bold flex items-center gap-2">
-                        <MapPin className="w-3 h-3 text-blue-400" />
-                        {location.lat ? 'GPS Active' : 'Locating...'}
-                       </p>
-                    </div>
+                    <div className="absolute inset-0 border-[30px] border-black/10 pointer-events-none" />
                   </div>
 
                   <div className="mt-6">
                     <button 
                       onClick={handleCapture} 
                       disabled={!isCameraReady || submitLoading} 
-                      className={`w-full py-5 rounded-2xl font-black text-xl shadow-xl transition-all ${punchType === 'IN' ? 'bg-blue-600 text-white hover:bg-blue-700' : 'bg-red-600 text-white hover:bg-red-700'} disabled:opacity-50`}
+                      className={`w-full py-4 rounded-2xl font-black text-lg shadow-lg shadow-blue-200 transition-all active:scale-[0.98] flex items-center justify-center gap-3 ${punchType === 'IN' ? 'bg-blue-600 text-white hover:bg-blue-700' : 'bg-red-600 text-white hover:bg-red-700'} disabled:opacity-50`}
                     >
-                      <Camera className="w-6 h-6 inline mr-2" />
-                      {punchType === 'IN' ? 'CHECK IN' : 'CHECK OUT'}
+                      <Camera className="w-6 h-6" />
+                      {punchType === 'IN' ? 'CHECK IN NOW' : 'CHECK OUT NOW'}
                     </button>
-
                     {submitStatus && (
-                      <div className={`mt-4 p-4 rounded-xl text-sm font-bold text-center animate-pulse ${submitStatus.includes('✅') ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}>
+                      <div className={`mt-4 p-3 rounded-xl text-xs font-bold text-center border ${submitStatus.includes('✅') ? 'bg-green-50 text-green-700 border-green-100' : 'bg-red-50 text-red-700 border-red-100'}`}>
                         {submitStatus}
                       </div>
                     )}
                   </div>
                 </>
               )}
+            </div>
+
+            <div className="bg-white rounded-[2rem] border border-slate-200 shadow-sm p-6">
+               <div className="grid grid-cols-2 gap-4">
+                  <div className="p-4 bg-slate-50 rounded-2xl border border-slate-100">
+                    <div className="flex items-center gap-2 mb-2">
+                      <LogIn className="w-4 h-4 text-blue-600" />
+                      <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Punch In</p>
+                    </div>
+                    {/* FIXED: Directly displaying record time if available */}
+                    <p className="text-xl font-black text-slate-900">{formatTime(record?.punchInTime)}</p>
+                  </div>
+                  <div className="p-4 bg-slate-50 rounded-2xl border border-slate-100">
+                    <div className="flex items-center gap-2 mb-2">
+                      <LogOut className="w-4 h-4 text-red-600" />
+                      <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Punch Out</p>
+                    </div>
+                    {/* FIXED: Directly displaying record time if available */}
+                    <p className="text-xl font-black text-slate-900">{formatTime(record?.punchOutTime)}</p>
+                  </div>
+               </div>
+            </div>
+          </div>
+
+          <div className="lg:col-span-7 space-y-6">
+            <div className="bg-white rounded-[2rem] border border-slate-200 shadow-sm overflow-hidden">
+              <div className="p-8 border-b border-slate-100">
+                <div className="flex items-center gap-4 mb-4">
+                  <div className="w-12 h-12 bg-blue-50 rounded-2xl flex items-center justify-center">
+                    <UserCheck className="w-6 h-6 text-blue-600" />
+                  </div>
+                  <h2 className="text-xl font-black text-slate-900">Presence & Leave Analytics</h2>
+                </div>
+
+                <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
+                  <StatBox icon={<UserCheck className="text-blue-600" />} label="Presence" val={annualStats.presentCount} sub={`/ ${TOTAL_WORK_DAYS}`} progress={annualStats.attendanceProgress} color="bg-blue-600" />
+                  <SickCasualStatBox icon={<Activity className="text-indigo-600" />} label="Sick" remaining={leaveSummary.sick} taken={sickTaken} total={TOTAL_LIMIT} showLoader={sickTaken > 0} color="bg-indigo-600" />
+                  <SickCasualStatBox icon={<CalendarDays className="text-purple-600" />} label="Casual" remaining={leaveSummary.casual} taken={casualTaken} total={TOTAL_LIMIT} showLoader={casualTaken > 0} color="bg-purple-600" />
+                  <StatBox icon={<TrendingUp className="text-red-600" />} label="Total Taken" val={annualStats.totalTaken} sub="All Leaves" progress={annualStats.leaveImpact} color="bg-red-600" />
+                  <StatBox icon={<Target className="text-orange-600" />} label="Impact" val={annualStats.totalTaken} sub={`/ ${TOTAL_WORK_DAYS}`} progress={annualStats.leaveImpact} color="bg-orange-600" />
+                </div>
+              </div>
+            </div>
+
+            <div className="bg-white rounded-[2rem] border border-slate-200 shadow-sm overflow-hidden flex flex-col h-[400px]">
+              <div className="p-6 border-b border-slate-100 flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 bg-slate-100 rounded-2xl flex items-center justify-center"><Calendar className="w-5 h-5 text-blue-600" /></div>
+                  <h2 className="font-bold text-lg text-slate-900">Attendance History</h2>
+                </div>
+                <div className="flex items-center gap-3 relative">
+                  <div className="flex items-center gap-2 bg-slate-50 p-2 rounded-xl border border-slate-200">
+                    <Filter className="w-4 h-4 text-slate-400" />
+                    <select className="text-sm font-bold outline-none bg-transparent cursor-pointer min-w-[120px]" value={selectedFilter} onChange={(e) => handleFilterChange(e.target.value as FilterType)}>
+                      <option value="all">All Records</option>
+                      <option value="lastDay">Last Day</option>
+                      <option value="lastWeek">Last Week</option>
+                      <option value="lastMonth">Last Month</option>
+                      <option value="custom">Custom Range</option>
+                    </select>
+                  </div>
+                  {showCustomDatePicker && (
+                    <div className="absolute right-0 top-12 z-50 bg-white rounded-xl border border-slate-200 shadow-xl p-4 w-72">
+                      <div className="space-y-3">
+                        <input type="date" value={customStartDate} onChange={(e) => setCustomStartDate(e.target.value)} className="w-full p-2 border border-slate-300 rounded-lg text-sm" />
+                        <input type="date" value={customEndDate} onChange={(e) => setCustomEndDate(e.target.value)} className="w-full p-2 border border-slate-300 rounded-lg text-sm" />
+                        <div className="flex gap-2 pt-2">
+                          <button onClick={handleCustomDateApply} className="flex-1 bg-blue-600 text-white py-2 rounded-lg font-bold text-sm">Apply</button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="overflow-auto flex-1">
+                <table className="w-full text-left border-collapse">
+                  <thead className="sticky top-0 bg-white z-10 shadow-sm">
+                    <tr className="bg-slate-50/50">
+                      <th className="px-6 py-4 text-[11px] uppercase text-slate-400 font-black tracking-widest">Date</th>
+                      <th className="px-6 py-4 text-[11px] uppercase text-slate-400 font-black tracking-widest">Status</th>
+                      <th className="px-6 py-4 text-[11px] uppercase text-slate-400 font-black tracking-widest text-center">Punch In</th>
+                      <th className="px-6 py-4 text-[11px] uppercase text-slate-400 font-black tracking-widest text-center">Punch Out</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-50">
+                    {filteredAttendance.map((att, i) => (
+                      <tr key={i} className="hover:bg-slate-50/50 transition-colors">
+                        <td className="px-6 py-4 font-bold text-slate-900 whitespace-nowrap">{formatDate(att.date)}</td>
+                        <td className="px-6 py-4">
+                          <span className={`px-3 py-1 rounded-full text-[10px] font-black border ${att.present ? 'bg-emerald-50 text-emerald-700 border-emerald-100' : 'bg-red-50 text-red-700 border-red-100'}`}>
+                            {att.present ? "PRESENT" : "ABSENT"}
+                          </span>
+                        </td>
+                        <td className="px-6 py-4 text-center">
+                          <div className="flex flex-col items-center">
+                            <div className="flex items-center gap-1.5 mb-1">
+                              <LogIn className="w-3 h-3 text-blue-500" />
+                              <span className="text-sm font-bold text-blue-600">{formatDateTime(att.punchInTime)}</span>
+                            </div>
+                          </div>
+                        </td>
+                        <td className="px-6 py-4 text-center">
+                          <div className="flex flex-col items-center">
+                            <div className="flex items-center gap-1.5 mb-1">
+                              <LogOut className="w-3 h-3 text-red-500" />
+                              <span className="text-sm font-bold text-red-600">{formatDateTime(att.punchOutTime)}</span>
+                            </div>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
           </div>
         </div>
@@ -392,5 +552,38 @@ const AttendancePage = () => {
     </div>
   );
 };
+
+// UI Components
+const StatBox = ({ icon, label, val, sub, progress, color }: any) => (
+  <div className="bg-white rounded-xl p-4 border border-slate-200 shadow-sm">
+    <div className="flex items-center justify-between mb-3">
+      <div className="w-8 h-8 rounded-lg bg-slate-50 flex items-center justify-center border border-slate-100">{icon}</div>
+      <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">{label}</span>
+    </div>
+    <div className="space-y-2">
+      <h3 className="text-2xl font-black text-slate-900">{val}</h3>
+      <p className="text-[10px] text-slate-600 font-medium uppercase">{sub}</p>
+      <div className="h-1.5 w-full bg-slate-100 rounded-full overflow-hidden">
+        <div className={`h-full ${color} transition-all duration-1000`} style={{ width: `${Math.min(progress, 100)}%` }} />
+      </div>
+    </div>
+  </div>
+);
+
+const SickCasualStatBox = ({ icon, label, remaining, taken, total, showLoader, color }: any) => (
+  <div className="bg-white rounded-xl p-4 border border-slate-200 shadow-sm">
+    <div className="flex items-center justify-between mb-3">
+      <div className="w-8 h-8 rounded-lg bg-slate-50 flex items-center justify-center border border-slate-100">{icon}</div>
+      <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">{label}</span>
+    </div>
+    <div className="space-y-2">
+      <h3 className="text-2xl font-black text-slate-900">{remaining}</h3>
+      <p className="text-[10px] text-slate-600 font-medium uppercase">Taken: {taken}</p>
+      <div className="h-1.5 w-full bg-slate-100 rounded-full overflow-hidden">
+        <div className={`h-full ${color} transition-all duration-1000`} style={{ width: `${(taken / total) * 100}%` }} />
+      </div>
+    </div>
+  </div>
+);
 
 export default AttendancePage;

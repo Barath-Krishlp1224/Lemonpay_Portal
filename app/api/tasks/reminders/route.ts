@@ -20,7 +20,7 @@ export async function POST() {
 
     // ✅ Find tasks that have a due date and are not completed
     const tasks = await Task.find({
-      dueDate: { $exists: true, $nin: [null, ""] }, // ✅ no duplicate keys
+      dueDate: { $exists: true, $nin: [null, ""] },
       status: { $ne: "Completed" },
     });
 
@@ -28,7 +28,7 @@ export async function POST() {
     let overdueCount = 0;
 
     for (const task of tasks) {
-      const { projectId, project, assigneeName, dueDate, department } = task;
+      const { projectId, project, assigneeNames, dueDate, department, _id } = task;
 
       if (!dueDate) continue; // safety
 
@@ -44,13 +44,22 @@ export async function POST() {
         webhookUrl = accountsWebhookUrl || webhookUrl;
       }
 
+      if (!webhookUrl) continue; // Skip if no webhook URL
+
+      // Get assignee name(s) - use first one if array exists, otherwise empty string
+      const assigneeText = assigneeNames && assigneeNames.length > 0 
+        ? assigneeNames.join(", ") 
+        : "Unassigned";
+
       // 1️⃣ Reminder: 2 days before due date
-      if (diffDays === 2 && !task.dueReminderSent && webhookUrl) {
+      // Since we don't have dueReminderSent field, we'll send reminder every time this runs
+      // when task is 2 days before due date
+      if (diffDays === 2 && webhookUrl) {
         const text =
           `⏰ *Reminder: Task due in 2 days*\n` +
           `• *ID:* ${projectId}\n` +
           `• *Project:* ${project}\n` +
-          `• *Assignee:* ${assigneeName}\n` +
+          `• *Assignee(s):* ${assigneeText}\n` +
           `• *Due Date:* ${dueDate}`;
 
         try {
@@ -59,9 +68,14 @@ export async function POST() {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ text }),
           });
-          task.dueReminderSent = true;
-          await task.save();
           reminderCount++;
+          
+          // Optionally add a note that reminder was sent
+          // You could add a 'lastReminderSent' field to track when reminder was sent
+          await Task.findByIdAndUpdate(_id, {
+            $set: { lastReminderSent: new Date() }
+          }, { new: true });
+          
         } catch (err) {
           console.error(
             `Failed to send reminder Slack for task ${projectId}`,
@@ -71,12 +85,14 @@ export async function POST() {
       }
 
       // 2️⃣ Overdue alert: due date is in the past
-      if (diffDays < 0 && !task.overdueNotified && webhookUrl) {
+      // Since we don't have overdueNotified field, we'll send alert every time this runs
+      // when task is overdue (or could send once per day)
+      if (diffDays < 0 && webhookUrl) {
         const text =
           `⚠️ *Overdue Task Alert*\n` +
           `• *ID:* ${projectId}\n` +
           `• *Project:* ${project}\n` +
-          `• *Assignee:* ${assigneeName}\n` +
+          `• *Assignee(s):* ${assigneeText}\n` +
           `• *Due Date:* ${dueDate}\n` +
           `• Status: ${task.status}`;
 
@@ -86,9 +102,13 @@ export async function POST() {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ text }),
           });
-          task.overdueNotified = true;
-          await task.save();
           overdueCount++;
+          
+          // Optionally add a note that overdue alert was sent
+          await Task.findByIdAndUpdate(_id, {
+            $set: { lastOverdueAlert: new Date() }
+          }, { new: true });
+          
         } catch (err) {
           console.error(
             `Failed to send overdue Slack for task ${projectId}`,

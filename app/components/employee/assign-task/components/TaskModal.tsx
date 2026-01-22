@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useState, useMemo, useEffect } from "react";
+import React, { useCallback, useState, useMemo, useEffect, useRef } from "react";
 import {
   X,
   Edit2,
@@ -22,7 +22,23 @@ import {
   FolderTree,
   Layers,
   Briefcase,
-  ListTree
+  ListTree,
+  Send,
+  AtSign,
+  MessageSquare,
+  MoreVertical,
+  Pencil,
+  Check,
+  X as XIcon,
+  AlertCircle as AlertCircleIcon,
+  Paperclip,
+  Image as ImageIcon,
+  File,
+  XCircle,
+  Upload,
+  FileText,
+  Download,
+  ExternalLink
 } from "lucide-react";
 import {
   Task,
@@ -30,6 +46,8 @@ import {
   Employee,
   SubtaskChangeHandler,
   SubtaskPathHandler,
+  Comment,
+  Attachment
 } from "./types";
 import TaskSubtaskEditor from "./TaskSubtaskEditor";
 import SubtaskModal from "./SubtaskModal";
@@ -70,46 +88,31 @@ const sumAllSubtasksStoryPoints = (subtasks: Subtask[] | undefined | null): numb
 
 // --- All Task Statuses ---
 const allTaskStatuses = [
-  // Planning
   "Icebox",
   "Backlog",
   "Prioritized",
-  
-  // Ready
   "Todo",
   "Ready for Dev",
-  
-  // Development
   "In Progress",
   "Dev Review",
   "Code Review",
-  
-  // Testing
   "QA Ready",
   "QA In Progress",
   "QA Review",
-  
-  // Review & Approval
   "UAT",
   "Client Review",
-  
-  // Release
   "Ready for Release",
   "Staging",
   "Production",
   "Live",
-  
-  // Completion
   "Done",
   "Closed",
-  
-  // Issues
   "Blocked",
   "On Hold",
   "Rejected"
 ];
 
-// --- Status Color Logic (Backgrounds only, Text is Black) ---
+// --- Status Color Logic ---
 const getStatusBgColor = (status: string = "") => {
   const statusColors: Record<string, string> = {
     "Icebox": "bg-gray-100 text-gray-800 border-gray-200",
@@ -141,12 +144,10 @@ const getStatusBgColor = (status: string = "") => {
 
 // --- Get Subtask Progress with Fallback ---
 const getSubtaskProgress = (subtask: Subtask): number => {
-  // Check if progress property exists
   if ('progress' in subtask && subtask.progress !== undefined) {
     return Number(subtask.progress) || 0;
   }
   
-  // Fallback: Calculate progress based on status
   switch (subtask.status?.toLowerCase()) {
     case "completed":
     case "done":
@@ -167,14 +168,1127 @@ const canUserEditSubtask = (subtask: Subtask, currentUser: { name: string; role:
   if (currentUser.role === "Admin" || currentUser.role === "Manager") return true;
   
   if (currentUser.role === "Employee") {
-    // Employee can edit subtask if:
-    // 1. They are assigned to it, OR
-    // 2. Subtask has no assignee (unassigned)
-    if (!subtask.assigneeName) return true; // Unassigned subtasks can be edited by any employee
+    if (!subtask.assigneeName) return true;
     return subtask.assigneeName.toLowerCase() === currentUser.name.toLowerCase();
   }
   
   return false;
+};
+
+// --- Check if user can edit/delete comment ---
+const canUserModifyComment = (comment: Comment, currentUser: { name: string; role: string; id: string }) => {
+  // Admins and Managers can edit/delete any comment
+  if (currentUser.role === "Admin" || currentUser.role === "Manager") {
+    return { canEdit: true, canDelete: true };
+  }
+  
+  // Employees can only edit/delete their own comments
+  if (currentUser.role === "Employee") {
+    const isOwner = comment.userId === currentUser.id || comment.userName === currentUser.name;
+    return { canEdit: isOwner, canDelete: isOwner };
+  }
+  
+  return { canEdit: false, canDelete: false };
+};
+
+// --- Check if user can delete attachment ---
+const canUserDeleteAttachment = (attachment: Attachment, comment: Comment, currentUser: { name: string; role: string; id: string }) => {
+  if (currentUser.role === "Admin" || currentUser.role === "Manager") return true;
+  
+  // Users can delete their own attachments
+  if (attachment.uploadedById === currentUser.id) return true;
+  
+  // Users can delete attachments from their own comments
+  if (comment.userId === currentUser.id) return true;
+  
+  return false;
+};
+
+// --- File upload utilities ---
+const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
+const ALLOWED_FILE_TYPES = [
+  'image/jpeg',
+  'image/jpg',
+  'image/png',
+  'image/gif',
+  'image/webp',
+  'image/svg+xml',
+  'application/pdf',
+  'application/msword',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.ms-excel',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'text/plain',
+  'application/zip',
+  'application/x-rar-compressed',
+  'application/x-7z-compressed'
+];
+
+const getFileIcon = (fileType: string) => {
+  if (fileType.startsWith('image/')) {
+    return <ImageIcon size={16} className="text-blue-500" />;
+  } else if (fileType.includes('pdf')) {
+    return <FileText size={16} className="text-red-500" />;
+  } else if (fileType.includes('word') || fileType.includes('document')) {
+    return <FileText size={16} className="text-blue-600" />;
+  } else if (fileType.includes('excel') || fileType.includes('sheet')) {
+    return <FileText size={16} className="text-green-600" />;
+  } else if (fileType.includes('zip') || fileType.includes('rar') || fileType.includes('7z')) {
+    return <File size={16} className="text-purple-500" />;
+  } else if (fileType.includes('text')) {
+    return <FileText size={16} className="text-gray-600" />;
+  } else {
+    return <File size={16} className="text-gray-500" />;
+  }
+};
+
+const formatFileSize = (bytes: number): string => {
+  if (bytes === 0) return '0 Bytes';
+  const k = 1024;
+  const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+};
+
+const getFileExtension = (fileName: string): string => {
+  return fileName.slice((fileName.lastIndexOf(".") - 1 >>> 0) + 2).toUpperCase();
+};
+
+// --- Image Preview Component ---
+const ImagePreview: React.FC<{ src: string; alt: string; className?: string }> = ({ src, alt, className = "" }) => {
+  const [isOpen, setIsOpen] = useState(false);
+  
+  return (
+    <>
+      <div 
+        className={`relative cursor-pointer group ${className}`}
+        onClick={() => setIsOpen(true)}
+      >
+        <img 
+          src={src} 
+          alt={alt} 
+          className="w-full h-full object-cover rounded-lg border border-slate-200 hover:border-blue-300 transition-colors"
+          loading="lazy"
+        />
+        <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors rounded-lg flex items-center justify-center opacity-0 group-hover:opacity-100">
+          <ExternalLink size={20} className="text-white drop-shadow-lg" />
+        </div>
+      </div>
+      
+      {isOpen && (
+        <div 
+          className="fixed inset-0 z-[100] bg-black/80 flex items-center justify-center p-4"
+          onClick={() => setIsOpen(false)}
+        >
+          <button 
+            className="absolute top-4 right-4 p-2 bg-white/20 hover:bg-white/30 rounded-full backdrop-blur-sm"
+            onClick={() => setIsOpen(false)}
+          >
+            <X size={24} className="text-white" />
+          </button>
+          <img 
+            src={src} 
+            alt={alt} 
+            className="max-w-full max-h-full object-contain rounded-lg"
+            onClick={(e) => e.stopPropagation()}
+          />
+        </div>
+      )}
+    </>
+  );
+};
+
+// --- Comment Component with Edit/Delete and File Upload ---
+interface CommentBoxProps {
+  comments?: Comment[];
+  employees: Employee[];
+  currentUser: { name: string; id: string; role: string };
+  onAddComment: (text: string, attachments?: File[]) => Promise<void>;
+  onUpdateComment: (commentId: string, newText: string, attachments?: File[], removedAttachmentIds?: string[]) => Promise<void>;
+  onDeleteComment: (commentId: string) => Promise<void>;
+  onDeleteAttachment: (commentId: string, attachmentId: string) => Promise<void>;
+  onTagEmployee: (employeeName: string) => void;
+}
+
+interface UploadingFile {
+  id: string;
+  file: File;
+  progress: number;
+  error?: string;
+}
+
+const CommentBox: React.FC<CommentBoxProps> = ({
+  comments = [],
+  employees,
+  currentUser,
+  onAddComment,
+  onUpdateComment,
+  onDeleteComment,
+  onDeleteAttachment,
+  onTagEmployee
+}) => {
+  const [commentText, setCommentText] = useState("");
+  const [editingCommentId, setEditingCommentId] = useState<string | null>(null);
+  const [editText, setEditText] = useState("");
+  const [showMentionList, setShowMentionList] = useState(false);
+  const [mentionPosition, setMentionPosition] = useState(0);
+  const [mentionSearch, setMentionSearch] = useState("");
+  const [filteredEmployees, setFilteredEmployees] = useState<Employee[]>(employees);
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [openMenuId, setOpenMenuId] = useState<string | null>(null);
+  
+  // File upload states
+  const [files, setFiles] = useState<File[]>([]);
+  const [editFiles, setEditFiles] = useState<File[]>([]);
+  const [filesToRemove, setFilesToRemove] = useState<string[]>([]);
+  const [uploadingFiles, setUploadingFiles] = useState<UploadingFile[]>([]);
+  const [dragOver, setDragOver] = useState(false);
+  const [imagePreviews, setImagePreviews] = useState<string[]>([]);
+  const [editImagePreviews, setEditImagePreviews] = useState<string[]>([]);
+  
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const editTextareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const editFileInputRef = useRef<HTMLInputElement>(null);
+
+  // Close menu when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (openMenuId && !(event.target as Element).closest(`.comment-menu-${openMenuId}`)) {
+        setOpenMenuId(null);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [openMenuId]);
+
+  // Filter employees based on mention search
+  useEffect(() => {
+    if (mentionSearch) {
+      const filtered = employees.filter(emp =>
+        emp.name.toLowerCase().includes(mentionSearch.toLowerCase())
+      );
+      setFilteredEmployees(filtered);
+    } else {
+      setFilteredEmployees(employees);
+    }
+  }, [mentionSearch, employees]);
+
+  // Focus edit textarea when editing starts
+  useEffect(() => {
+    if (editingCommentId && editTextareaRef.current) {
+      editTextareaRef.current.focus();
+      editTextareaRef.current.setSelectionRange(editText.length, editText.length);
+    }
+  }, [editingCommentId, editText.length]);
+
+  // Generate image previews when files change
+  useEffect(() => {
+    const previews: string[] = [];
+    files.forEach(file => {
+      if (file.type.startsWith('image/')) {
+        previews.push(URL.createObjectURL(file));
+      }
+    });
+    setImagePreviews(previews);
+    
+    return () => {
+      previews.forEach(preview => URL.revokeObjectURL(preview));
+    };
+  }, [files]);
+
+  useEffect(() => {
+    const previews: string[] = [];
+    editFiles.forEach(file => {
+      if (file.type.startsWith('image/')) {
+        previews.push(URL.createObjectURL(file));
+      }
+    });
+    setEditImagePreviews(previews);
+    
+    return () => {
+      previews.forEach(preview => URL.revokeObjectURL(preview));
+    };
+  }, [editFiles]);
+
+  // Handle file selection
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>, isEdit: boolean = false) => {
+    const selectedFiles = Array.from(e.target.files || []);
+    const validFiles: File[] = [];
+    const errors: string[] = [];
+
+    selectedFiles.forEach(file => {
+      if (file.size > MAX_FILE_SIZE) {
+        errors.push(`${file.name} exceeds 10MB limit`);
+      } else if (!ALLOWED_FILE_TYPES.includes(file.type)) {
+        errors.push(`${file.name} has unsupported file type (${file.type})`);
+      } else {
+        validFiles.push(file);
+      }
+    });
+
+    if (errors.length > 0) {
+      alert(`Some files were rejected:\n${errors.join('\n')}`);
+    }
+
+    if (validFiles.length > 0) {
+      if (isEdit) {
+        setEditFiles(prev => [...prev, ...validFiles]);
+      } else {
+        setFiles(prev => [...prev, ...validFiles]);
+      }
+    }
+
+    // Reset file input
+    e.target.value = '';
+  };
+
+  // Handle drag and drop
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    setDragOver(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    setDragOver(false);
+  };
+
+  const handleDrop = (e: React.DragEvent, isEdit: boolean = false) => {
+    e.preventDefault();
+    setDragOver(false);
+    
+    const droppedFiles = Array.from(e.dataTransfer.files);
+    const dataTransfer = new DataTransfer();
+    
+    droppedFiles.forEach(file => {
+      if (file.size <= MAX_FILE_SIZE && ALLOWED_FILE_TYPES.includes(file.type)) {
+        dataTransfer.items.add(file);
+      }
+    });
+
+    if (dataTransfer.files.length > 0) {
+      const event = { target: { files: dataTransfer.files } } as React.ChangeEvent<HTMLInputElement>;
+      handleFileSelect(event, isEdit);
+    }
+  };
+
+  // Remove file from upload list
+  const removeFile = (index: number, isEdit: boolean = false) => {
+    if (isEdit) {
+      const file = editFiles[index];
+      if (file.type.startsWith('image/')) {
+        const previewIndex = editFiles.slice(0, index).filter(f => f.type.startsWith('image/')).length;
+        URL.revokeObjectURL(editImagePreviews[previewIndex]);
+        setEditImagePreviews(prev => prev.filter((_, i) => i !== previewIndex));
+      }
+      setEditFiles(prev => prev.filter((_, i) => i !== index));
+    } else {
+      const file = files[index];
+      if (file.type.startsWith('image/')) {
+        const previewIndex = files.slice(0, index).filter(f => f.type.startsWith('image/')).length;
+        URL.revokeObjectURL(imagePreviews[previewIndex]);
+        setImagePreviews(prev => prev.filter((_, i) => i !== previewIndex));
+      }
+      setFiles(prev => prev.filter((_, i) => i !== index));
+    }
+  };
+
+  // Mark existing attachment for removal
+  const markAttachmentForRemoval = (attachmentId: string) => {
+    if (filesToRemove.includes(attachmentId)) {
+      setFilesToRemove(prev => prev.filter(id => id !== attachmentId));
+    } else {
+      setFilesToRemove(prev => [...prev, attachmentId]);
+    }
+  };
+
+  const handleTextChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const text = e.target.value;
+    setCommentText(text);
+
+    // Check for @ mentions
+    const cursorPos = e.target.selectionStart;
+    const textBeforeCursor = text.substring(0, cursorPos);
+    const lastAtIndex = textBeforeCursor.lastIndexOf("@");
+
+    if (lastAtIndex !== -1 && (cursorPos === lastAtIndex + 1 || textBeforeCursor[lastAtIndex + 1] === " " || textBeforeCursor.substring(lastAtIndex + 1).includes(" "))) {
+      setShowMentionList(true);
+      setMentionPosition(lastAtIndex);
+      setMentionSearch("");
+    } else if (lastAtIndex !== -1) {
+      const searchTerm = textBeforeCursor.substring(lastAtIndex + 1);
+      const spaceIndex = searchTerm.indexOf(" ");
+      if (spaceIndex === -1) {
+        setShowMentionList(true);
+        setMentionSearch(searchTerm);
+      } else {
+        setShowMentionList(false);
+      }
+    } else {
+      setShowMentionList(false);
+    }
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (showMentionList && e.key === "ArrowDown") {
+      e.preventDefault();
+    } else if (showMentionList && e.key === "Enter" && filteredEmployees.length > 0) {
+      e.preventDefault();
+      handleMentionSelect(filteredEmployees[0].name);
+    } else if (e.key === "Enter" && !e.shiftKey && (commentText.trim() || files.length > 0)) {
+      e.preventDefault();
+      handleSubmit();
+    }
+  };
+
+  const handleEditKeyDown = (e: React.KeyboardEvent, commentId: string) => {
+    if (e.key === "Enter" && !e.shiftKey && (editText.trim() || editFiles.length > 0 || filesToRemove.length > 0)) {
+      e.preventDefault();
+      handleSaveEdit(commentId);
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      setEditingCommentId(null);
+      setEditText("");
+      setEditFiles([]);
+      setFilesToRemove([]);
+    }
+  };
+
+  const handleMentionSelect = (employeeName: string) => {
+    const textBefore = commentText.substring(0, mentionPosition);
+    const textAfter = commentText.substring(mentionPosition);
+    const spaceIndex = textAfter.indexOf(" ");
+    const replaceLength = spaceIndex !== -1 ? spaceIndex : textAfter.length;
+    
+    const newText = textBefore + "@" + employeeName + " " + textAfter.substring(replaceLength);
+    setCommentText(newText);
+    setShowMentionList(false);
+    setMentionSearch("");
+    
+    setTimeout(() => {
+      textareaRef.current?.focus();
+      const newCursorPos = mentionPosition + employeeName.length + 2;
+      textareaRef.current?.setSelectionRange(newCursorPos, newCursorPos);
+    }, 0);
+
+    onTagEmployee(employeeName);
+  };
+
+  const handleSubmit = async () => {
+    if ((commentText.trim() || files.length > 0) && !isSubmitting) {
+      setIsSubmitting(true);
+      try {
+        await onAddComment(commentText, files);
+        setCommentText("");
+        setFiles([]);
+        setImagePreviews([]);
+        setShowMentionList(false);
+      } catch (error) {
+        console.error("Failed to add comment:", error);
+      } finally {
+        setIsSubmitting(false);
+      }
+    }
+  };
+
+  const startEdit = (comment: Comment) => {
+    setEditingCommentId(comment._id || comment.id || null);
+    setEditText(comment.text);
+    setEditFiles([]);
+    setEditImagePreviews([]);
+    setFilesToRemove([]);
+  };
+
+  const handleSaveEdit = async (commentId: string) => {
+    if ((editText.trim() || editFiles.length > 0 || filesToRemove.length > 0) && !isSubmitting) {
+      setIsSubmitting(true);
+      try {
+        await onUpdateComment(commentId, editText, editFiles, filesToRemove);
+        setEditingCommentId(null);
+        setEditText("");
+        setEditFiles([]);
+        setEditImagePreviews([]);
+        setFilesToRemove([]);
+      } catch (error) {
+        console.error("Failed to update comment:", error);
+      } finally {
+        setIsSubmitting(false);
+      }
+    }
+  };
+
+  const handleDelete = async (commentId: string) => {
+    if (!isSubmitting) {
+      setIsSubmitting(true);
+      try {
+        await onDeleteComment(commentId);
+        setDeleteConfirmId(null);
+      } catch (error) {
+        console.error("Failed to delete comment:", error);
+      } finally {
+        setIsSubmitting(false);
+      }
+    }
+  };
+
+  const handleDeleteAttachmentClick = async (commentId: string, attachmentId: string) => {
+    if (!isSubmitting) {
+      setIsSubmitting(true);
+      try {
+        await onDeleteAttachment(commentId, attachmentId);
+      } catch (error) {
+        console.error("Failed to delete attachment:", error);
+      } finally {
+        setIsSubmitting(false);
+      }
+    }
+  };
+
+  const formatCommentText = (text: string) => {
+    return text.split(/(@\w+)/g).map((part, index) => {
+      if (part.startsWith("@")) {
+        const employeeName = part.substring(1);
+        const employee = employees.find(e => e.name === employeeName);
+        return employee ? (
+          <span key={index} className="inline-flex items-center gap-1 bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full text-xs font-bold mx-1">
+            <AtSign size={10} />
+            {employeeName}
+          </span>
+        ) : part;
+      }
+      return part;
+    });
+  };
+
+  const formatTimestamp = (timestamp?: string, editedAt?: string) => {
+    if (!timestamp) return "Just now";
+    
+    const date = new Date(timestamp);
+    const now = new Date();
+    const diffMs = now.getTime() - date.getTime();
+    const diffMins = Math.floor(diffMs / (1000 * 60));
+    const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+    const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+    
+    if (diffMins < 1) return "Just now";
+    if (diffMins < 60) return `${diffMins}m ago`;
+    if (diffHours < 24) return `${diffHours}h ago`;
+    if (diffDays < 7) return `${diffDays}d ago`;
+    
+    return date.toLocaleDateString('en-US', { 
+      month: 'short', 
+      day: 'numeric',
+      ...(date.getFullYear() !== now.getFullYear() && { year: 'numeric' })
+    });
+  };
+
+  // File preview component
+  const renderFilePreview = (file: File, index: number, isEdit: boolean = false) => {
+    const isImage = file.type.startsWith('image/');
+    const previewIndex = isEdit 
+      ? editFiles.slice(0, index).filter(f => f.type.startsWith('image/')).length
+      : files.slice(0, index).filter(f => f.type.startsWith('image/')).length;
+    const previewUrl = isEdit ? editImagePreviews[previewIndex] : imagePreviews[previewIndex];
+    
+    return (
+      <div key={`${file.name}-${index}`} className="flex items-center gap-2 p-2 bg-white rounded-lg border border-slate-200">
+        <div className="flex-shrink-0">
+          {getFileIcon(file.type)}
+        </div>
+        <div className="flex-1 min-w-0">
+          <p className="text-xs font-medium text-black truncate">{file.name}</p>
+          <p className="text-[10px] text-slate-500">{formatFileSize(file.size)} • {getFileExtension(file.name)}</p>
+        </div>
+        <button
+          type="button"
+          onClick={() => removeFile(index, isEdit)}
+          className="p-1 text-slate-400 hover:text-red-500 rounded"
+        >
+          <XCircle size={14} />
+        </button>
+      </div>
+    );
+  };
+
+  // Existing attachment component
+  const renderExistingAttachment = (attachment: Attachment, comment: Comment) => {
+    const isMarkedForRemoval = filesToRemove.includes(attachment.id);
+    const canDelete = canUserDeleteAttachment(attachment, comment, currentUser);
+    const isImage = attachment.fileType.startsWith('image/');
+    
+    return (
+      <div key={attachment.id} className={`group relative ${isMarkedForRemoval ? 'opacity-50' : ''}`}>
+        <div className={`flex items-center gap-2 p-2 bg-white rounded-lg border ${isMarkedForRemoval ? 'border-red-200 bg-red-50' : 'border-slate-200 hover:border-blue-300'}`}>
+          <div className="flex-shrink-0">
+            {getFileIcon(attachment.fileType)}
+          </div>
+          <div className="flex-1 min-w-0">
+            <a 
+              href={attachment.url} 
+              target="_blank" 
+              rel="noopener noreferrer"
+              className="text-xs font-medium text-blue-600 hover:text-blue-800 truncate block"
+              download={attachment.fileName}
+            >
+              {attachment.fileName}
+            </a>
+            <p className="text-[10px] text-slate-500">
+              {formatFileSize(attachment.fileSize)} • {getFileExtension(attachment.fileName)} • {new Date(attachment.uploadedAt).toLocaleDateString()}
+            </p>
+          </div>
+          <div className="flex items-center gap-1">
+            <a
+              href={attachment.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="p-1 text-slate-400 hover:text-blue-600 rounded"
+              title="Download"
+              download={attachment.fileName}
+            >
+              <Download size={14} />
+            </a>
+            {editingCommentId === comment._id && (
+              <button
+                type="button"
+                onClick={() => markAttachmentForRemoval(attachment.id)}
+                className={`p-1 rounded ${isMarkedForRemoval ? 'text-green-500 hover:text-green-600' : 'text-red-400 hover:text-red-600'}`}
+                title={isMarkedForRemoval ? 'Restore attachment' : 'Remove attachment'}
+              >
+                {isMarkedForRemoval ? <Check size={14} /> : <Trash2 size={14} />}
+              </button>
+            )}
+            {!editingCommentId && canDelete && (
+              <button
+                type="button"
+                onClick={() => handleDeleteAttachmentClick(comment._id || comment.id || "", attachment.id)}
+                className="p-1 text-red-400 hover:text-red-600 rounded opacity-0 group-hover:opacity-100 transition-opacity"
+                title="Delete attachment"
+              >
+                <Trash2 size={14} />
+              </button>
+            )}
+          </div>
+        </div>
+        
+        {/* Image preview overlay */}
+        {isImage && !isMarkedForRemoval && (
+          <div className="mt-2">
+            <ImagePreview 
+              src={attachment.url} 
+              alt={attachment.fileName}
+              className="max-h-48"
+            />
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  return (
+    <div className="space-y-4">
+      {/* Existing Comments */}
+      {comments && comments.length > 0 ? (
+        <div className="space-y-3 max-h-[400px] overflow-y-auto pr-2">
+          {comments.map((comment, index) => {
+            const isEditingThis = editingCommentId === (comment._id || comment.id);
+            const isDeleteConfirm = deleteConfirmId === (comment._id || comment.id);
+            const { canEdit, canDelete } = canUserModifyComment(comment, currentUser);
+            const isEdited = comment.editedAt && comment.editedAt !== comment.createdAt;
+            const imageAttachments = comment.attachments?.filter(a => a.fileType.startsWith('image/')) || [];
+            const fileAttachments = comment.attachments?.filter(a => !a.fileType.startsWith('image/')) || [];
+            
+            return (
+              <div key={comment._id || comment.id || index} className="bg-slate-50 p-4 rounded-2xl border border-slate-100 hover:border-slate-200 transition-all">
+                <div className="flex items-start gap-3">
+                  <div className="w-10 h-10 bg-gradient-to-br from-blue-100 to-blue-50 rounded-full flex items-center justify-center text-sm font-bold text-blue-600 border border-blue-200 flex-shrink-0">
+                    {comment.userName?.charAt(0).toUpperCase() || "U"}
+                  </div>
+                  <div className="flex-1">
+                    <div className="flex items-center justify-between mb-1">
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-bold text-black">{comment.userName}</span>
+                        <span className="text-xs text-slate-500">
+                          {formatTimestamp(comment.timestamp || comment.createdAt)}
+                          {isEdited && (
+                            <span className="ml-1 italic text-slate-400" title={`Edited at ${new Date(comment.editedAt!).toLocaleString()}`}>
+                              (edited)
+                            </span>
+                          )}
+                        </span>
+                        {comment.userId === currentUser.id && (
+                          <span className="text-[10px] bg-blue-100 text-blue-600 px-1.5 py-0.5 rounded">You</span>
+                        )}
+                      </div>
+                      
+                      {(canEdit || canDelete) && !isEditingThis && !isDeleteConfirm && (
+                        <div className="relative">
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setOpenMenuId(comment._id || comment.id || null);
+                            }}
+                            className="p-1 text-slate-400 hover:text-slate-600 rounded hover:bg-slate-100"
+                          >
+                            <MoreVertical size={16} />
+                          </button>
+                          
+                          {openMenuId === (comment._id || comment.id) && (
+                            <div
+                              className={`absolute right-0 mt-1 z-50 w-48 bg-white rounded-lg shadow-lg border border-slate-200 py-1 comment-menu-${comment._id || comment.id}`}
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              {canEdit && (
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    startEdit(comment);
+                                    setOpenMenuId(null);
+                                  }}
+                                  className="w-full flex items-center gap-2 px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 hover:text-slate-900"
+                                >
+                                  <Pencil size={14} />
+                                  Edit Comment
+                                </button>
+                              )}
+                              {canDelete && (
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setDeleteConfirmId(comment._id || comment.id || null);
+                                    setOpenMenuId(null);
+                                  }}
+                                  className="w-full flex items-center gap-2 px-4 py-2 text-sm text-red-600 hover:bg-red-50 hover:text-red-700"
+                                >
+                                  <Trash2 size={14} />
+                                  Delete Comment
+                                </button>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                    
+                    {/* Comment text or edit form */}
+                    {isEditingThis ? (
+                      <div className="space-y-2 mt-2">
+                        <textarea
+                          ref={editTextareaRef}
+                          value={editText}
+                          onChange={(e) => setEditText(e.target.value)}
+                          onKeyDown={(e) => handleEditKeyDown(e, comment._id || comment.id || "")}
+                          className="w-full p-3 bg-white rounded-xl border border-blue-300 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 outline-none resize-none text-sm text-black min-h-[80px]"
+                          rows={3}
+                          disabled={isSubmitting}
+                        />
+                        
+                        {/* Existing attachments */}
+                        {comment.attachments && comment.attachments.length > 0 && (
+                          <div className="space-y-2">
+                            <p className="text-xs text-slate-500 font-medium">Existing attachments:</p>
+                            <div className="space-y-2">
+                              {comment.attachments.map(attachment => 
+                                renderExistingAttachment(attachment, comment)
+                              )}
+                            </div>
+                          </div>
+                        )}
+                        
+                        {/* New file upload for edit */}
+                        <div
+                          className={`border-2 border-dashed rounded-xl p-4 transition-colors ${dragOver ? 'border-blue-500 bg-blue-50' : 'border-slate-300'}`}
+                          onDragOver={handleDragOver}
+                          onDragLeave={handleDragLeave}
+                          onDrop={(e) => handleDrop(e, true)}
+                        >
+                          <div className="text-center">
+                            <Upload className="w-6 h-6 text-slate-400 mx-auto mb-2" />
+                            <p className="text-sm text-slate-600 mb-1">Drop files here or click to upload</p>
+                            <p className="text-xs text-slate-400">Max 10MB per file • Images, PDF, Docs, Excel, ZIP</p>
+                            <input
+                              ref={editFileInputRef}
+                              type="file"
+                              multiple
+                              onChange={(e) => handleFileSelect(e, true)}
+                              className="hidden"
+                              accept={ALLOWED_FILE_TYPES.join(',')}
+                            />
+                            <button
+                              type="button"
+                              onClick={() => editFileInputRef.current?.click()}
+                              className="mt-2 px-4 py-2 bg-slate-100 text-slate-700 rounded-lg text-sm font-medium hover:bg-slate-200"
+                              disabled={isSubmitting}
+                            >
+                              <Paperclip size={14} className="inline mr-1" />
+                              Add Files
+                            </button>
+                          </div>
+                        </div>
+                        
+                        {/* Uploaded files preview for edit */}
+                        {editFiles.length > 0 && (
+                          <div className="space-y-2">
+                            <p className="text-xs text-slate-500 font-medium">New attachments:</p>
+                            <div className="space-y-2">
+                              {editFiles.map((file, index) => renderFilePreview(file, index, true))}
+                            </div>
+                          </div>
+                        )}
+                        
+                        {/* Edit actions */}
+                        <div className="flex items-center gap-2 pt-2">
+                          <button
+                            onClick={() => handleSaveEdit(comment._id || comment.id || "")}
+                            disabled={(!editText.trim() && editFiles.length === 0 && filesToRemove.length === 0) || isSubmitting}
+                            className={`px-4 py-2 rounded-lg text-sm font-medium ${
+                              (editText.trim() || editFiles.length > 0 || filesToRemove.length > 0) && !isSubmitting
+                                ? "bg-blue-600 hover:bg-blue-700 text-white"
+                                : "bg-slate-200 text-slate-400 cursor-not-allowed"
+                            }`}
+                          >
+                            {isSubmitting ? (
+                              <Loader2 size={16} className="animate-spin mx-2" />
+                            ) : (
+                              <>
+                                <Check size={16} className="inline mr-1" />
+                                Save Changes
+                              </>
+                            )}
+                          </button>
+                          <button
+                            onClick={() => {
+                              setEditingCommentId(null);
+                              setEditText("");
+                              setEditFiles([]);
+                              setEditImagePreviews([]);
+                              setFilesToRemove([]);
+                            }}
+                            disabled={isSubmitting}
+                            className="px-4 py-2 rounded-lg text-sm font-medium bg-slate-100 text-slate-600 hover:bg-slate-200"
+                          >
+                            <XIcon size={16} className="inline mr-1" />
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    ) : isDeleteConfirm ? (
+                      <div className="mt-3 p-4 bg-red-50 border border-red-200 rounded-xl">
+                        <div className="flex items-start gap-2 mb-3">
+                          <AlertCircleIcon size={16} className="text-red-600 mt-0.5 flex-shrink-0" />
+                          <div>
+                            <p className="text-sm font-medium text-red-800">Delete this comment?</p>
+                            <p className="text-xs text-red-600">This action cannot be undone.</p>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => handleDelete(comment._id || comment.id || "")}
+                            disabled={isSubmitting}
+                            className={`px-4 py-2 rounded-lg text-sm font-medium ${
+                              !isSubmitting
+                                ? "bg-red-600 hover:bg-red-700 text-white"
+                                : "bg-red-300 text-red-100 cursor-not-allowed"
+                            }`}
+                          >
+                            {isSubmitting ? (
+                              <Loader2 size={16} className="animate-spin mx-2" />
+                            ) : (
+                              <>
+                                <Trash2 size={16} className="inline mr-1" />
+                                Delete
+                              </>
+                            )}
+                          </button>
+                          <button
+                            onClick={() => setDeleteConfirmId(null)}
+                            disabled={isSubmitting}
+                            className="px-4 py-2 rounded-lg text-sm font-medium bg-slate-100 text-slate-600 hover:bg-slate-200"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <>
+                        {/* Comment text */}
+                        <div className="text-sm text-slate-700 whitespace-pre-wrap mb-3">
+                          {formatCommentText(comment.text)}
+                        </div>
+                        
+                        {/* Image attachments */}
+                        {imageAttachments.length > 0 && (
+                          <div className="space-y-2 mt-3">
+                            <div className="flex items-center gap-2">
+                              <ImageIcon size={14} className="text-slate-400" />
+                              <span className="text-xs text-slate-500 font-medium">Images:</span>
+                            </div>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
+                              {imageAttachments.map(attachment => (
+                                <ImagePreview
+                                  key={attachment.id}
+                                  src={attachment.url}
+                                  alt={attachment.fileName}
+                                />
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                        
+                        {/* File attachments */}
+                        {fileAttachments.length > 0 && (
+                          <div className="space-y-2 mt-3">
+                            <div className="flex items-center gap-2">
+                              <Paperclip size={14} className="text-slate-400" />
+                              <span className="text-xs text-slate-500 font-medium">Files:</span>
+                            </div>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                              {fileAttachments.map(attachment => (
+                                <a
+                                  key={attachment.id}
+                                  href={attachment.url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="flex items-center gap-2 p-2 bg-white rounded-lg border border-slate-200 hover:border-blue-300 hover:bg-blue-50 transition-colors group"
+                                  download={attachment.fileName}
+                                >
+                                  <div className="flex-shrink-0">
+                                    {getFileIcon(attachment.fileType)}
+                                  </div>
+                                  <div className="flex-1 min-w-0">
+                                    <p className="text-xs font-medium text-blue-600 group-hover:text-blue-800 truncate">{attachment.fileName}</p>
+                                    <p className="text-[10px] text-slate-500">
+                                      {formatFileSize(attachment.fileSize)} • {getFileExtension(attachment.fileName)}
+                                    </p>
+                                  </div>
+                                  <Download size={14} className="text-slate-400 group-hover:text-blue-600 flex-shrink-0" />
+                                </a>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="text-center py-6 bg-slate-50 rounded-2xl border border-slate-100">
+          <MessageSquare className="w-12 h-12 text-slate-300 mx-auto mb-2" />
+          <p className="text-slate-500">No comments yet</p>
+          <p className="text-slate-400 text-sm">Start the conversation!</p>
+        </div>
+      )}
+
+      {/* New Comment Input */}
+      <div className="relative">
+        <div className="flex items-start gap-3">
+          <div className="w-10 h-10 bg-gradient-to-br from-blue-100 to-blue-50 rounded-full flex items-center justify-center text-sm font-bold text-blue-600 border border-blue-200 flex-shrink-0 mt-1">
+            {currentUser.name?.charAt(0).toUpperCase() || "U"}
+          </div>
+          <div className="flex-1">
+            <textarea
+              ref={textareaRef}
+              value={commentText}
+              onChange={handleTextChange}
+              onKeyDown={handleKeyDown}
+              placeholder="Add a comment... Type @ to mention someone"
+              className="w-full p-4 bg-slate-50 rounded-2xl border border-slate-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 outline-none resize-none text-sm text-black placeholder:text-slate-400 min-h-[100px]"
+              rows={3}
+              disabled={isSubmitting}
+            />
+            
+            {/* Uploaded files preview */}
+            {files.length > 0 && (
+              <div className="mt-3 space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs text-slate-500 font-medium">Attachments ({files.length}):</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setFiles([]);
+                      setImagePreviews([]);
+                    }}
+                    className="text-xs text-red-500 hover:text-red-700"
+                    disabled={isSubmitting}
+                  >
+                    Clear all
+                  </button>
+                </div>
+                
+                {/* Image previews */}
+                {imagePreviews.length > 0 && (
+                  <div className="space-y-2">
+                    <div className="text-xs text-slate-500 font-medium">Images:</div>
+                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
+                      {imagePreviews.map((preview, index) => {
+                        const file = files.filter(f => f.type.startsWith('image/'))[index];
+                        return (
+                          <div key={index} className="relative group">
+                            <img 
+                              src={preview} 
+                              alt={file.name} 
+                              className="w-full h-24 object-cover rounded-lg border border-slate-200"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const fileIndex = files.findIndex(f => 
+                                  f.type.startsWith('image/') && 
+                                  files.slice(0, fileIndex).filter(f => f.type.startsWith('image/')).length === index
+                                );
+                                removeFile(fileIndex);
+                              }}
+                              className="absolute -top-2 -right-2 p-1 bg-red-500 text-white rounded-full hover:bg-red-600 opacity-0 group-hover:opacity-100 transition-opacity"
+                            >
+                              <X size={12} />
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+                
+                {/* File list */}
+                <div className="space-y-2">
+                  {files.filter(f => !f.type.startsWith('image/')).length > 0 && (
+                    <>
+                      <div className="text-xs text-slate-500 font-medium">Files:</div>
+                      <div className="space-y-1">
+                        {files.filter(f => !f.type.startsWith('image/')).map((file, index) => {
+                          const fileIndex = files.findIndex(f => f === file);
+                          return renderFilePreview(file, fileIndex);
+                        })}
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+            )}
+            
+            <div className="flex items-center justify-between mt-3">
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                  title="Attach files"
+                  disabled={isSubmitting}
+                >
+                  <Paperclip size={18} />
+                </button>
+                <span className="text-xs text-slate-500">
+                  {files.length > 0 ? `${files.length} file(s) attached` : 'No files attached'}
+                </span>
+              </div>
+              
+              <button
+                onClick={handleSubmit}
+                disabled={(!commentText.trim() && files.length === 0) || isSubmitting}
+                className={`px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 ${
+                  (commentText.trim() || files.length > 0) && !isSubmitting
+                    ? "bg-blue-600 hover:bg-blue-700 text-white"
+                    : "bg-slate-200 text-slate-400 cursor-not-allowed"
+                } transition-colors`}
+                title="Send comment"
+              >
+                {isSubmitting ? (
+                  <>
+                    <Loader2 size={16} className="animate-spin" />
+                    Sending...
+                  </>
+                ) : (
+                  <>
+                    <Send size={16} />
+                    Send
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* File upload input (hidden) */}
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple
+          onChange={(e) => handleFileSelect(e)}
+          className="hidden"
+          accept={ALLOWED_FILE_TYPES.join(',')}
+        />
+
+        {/* Drag and drop area */}
+        <div
+          className={`mt-3 border-2 border-dashed rounded-2xl p-6 transition-all ${dragOver ? 'border-blue-500 bg-blue-50' : 'border-slate-200'}`}
+          onDragOver={handleDragOver}
+          onDragLeave={handleDragLeave}
+          onDrop={(e) => handleDrop(e)}
+        >
+          <div className="text-center">
+            <Upload className="w-8 h-8 text-slate-400 mx-auto mb-3" />
+            <p className="text-sm text-slate-600 mb-1">Drag & drop files here to attach</p>
+            <p className="text-xs text-slate-400">Supports images, documents, and other files up to 10MB each</p>
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              className="mt-3 px-4 py-2 bg-slate-100 text-slate-700 rounded-lg text-sm font-medium hover:bg-slate-200 flex items-center gap-2 mx-auto"
+              disabled={isSubmitting}
+            >
+              <Paperclip size={14} />
+              Browse Files
+            </button>
+          </div>
+        </div>
+
+        {/* Mention Dropdown */}
+        {showMentionList && (
+          <div className="absolute left-12 right-0 top-full mt-1 z-50">
+            <div className="bg-white rounded-xl border border-slate-200 shadow-lg overflow-hidden">
+              <div className="p-2 border-b border-slate-100">
+                <div className="flex items-center gap-2 text-xs text-slate-500">
+                  <AtSign size={12} />
+                  <span>Mention teammate:</span>
+                </div>
+              </div>
+              <div className="max-h-48 overflow-y-auto">
+                {filteredEmployees.length > 0 ? (
+                  filteredEmployees.map((employee) => (
+                    <button
+                      key={employee._id}
+                      onClick={() => handleMentionSelect(employee.name)}
+                      className="w-full flex items-center gap-3 p-3 hover:bg-blue-50 transition-colors text-left"
+                    >
+                      <div className="w-8 h-8 bg-gradient-to-br from-blue-100 to-blue-50 rounded-full flex items-center justify-center text-xs font-bold text-blue-600 border border-blue-200">
+                        {employee.name.charAt(0).toUpperCase()}
+                      </div>
+                      <div>
+                        <div className="text-sm font-bold text-black">{employee.name}</div>
+                        <div className="text-xs text-slate-500">{employee.role || "Employee"}</div>
+                      </div>
+                    </button>
+                  ))
+                ) : (
+                  <div className="p-4 text-center text-slate-500">
+                    No employees found
+                  </div>
+                )}
+              </div>
+              <div className="p-2 border-t border-slate-100 text-xs text-slate-400">
+                Press Enter to select, Esc to cancel
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
 };
 
 // --- Sub-Components ---
@@ -182,7 +1296,6 @@ const DueDateReminder: React.FC<{ dueDate?: string | null; endDate?: string | nu
   const daysToDue = calculateDaysDiff(dueDate);
   const daysToEnd = calculateDaysDiff(endDate);
   
-  // Check if status is a completion status
   const completionStatuses = ["Done", "Completed", "Closed", "Live"];
   const isCompleted = completionStatuses.includes(status || "");
   
@@ -220,13 +1333,11 @@ const SubtaskViewer: React.FC<{
   return (
     <ul className={`space-y-3 ${level > 0 ? "mt-3 border-l-2 border-slate-200 ml-4 pl-4" : ""}`}>
       {subtasks.map((sub, i) => {
-        // Safely get progress with fallback
         const progress = getSubtaskProgress(sub);
         const subStatus = sub.status || "To Do";
         const subTitle = sub.title || "Untitled Subtask";
         const subAssignee = sub.assigneeName || "";
         
-        // Check if current user can edit this specific subtask
         const canEditThisSubtask = canUserEditSubtask(sub, currentUser);
         
         return (
@@ -369,6 +1480,11 @@ interface TaskModalProps {
   handleStartSprint: (taskId: string) => void;
   onTaskStatusChange: (taskId: string, newStatus: string) => void;
   onSubtaskStatusChange: (taskId: string, subtaskId: string | null, newStatus: string) => void;
+  onAddComment: (taskId: string, commentText: string, attachments?: File[]) => Promise<void>;
+  onUpdateComment: (taskId: string, commentId: string, newText: string, attachments?: File[], removedAttachmentIds?: string[]) => Promise<void>;
+  onDeleteComment: (taskId: string, commentId: string) => Promise<void>;
+  onDeleteAttachment?: (taskId: string, commentId: string, attachmentId: string) => Promise<void>;
+  comments?: Comment[];
   isLoading?: boolean;
   currentUserRole?: string;
   currentUserId?: string;
@@ -381,13 +1497,16 @@ const TaskModal: React.FC<TaskModalProps> = (props) => {
     currentProjectPrefix, handleEdit, handleDelete,
     handleUpdate, cancelEdit, handleDraftChange, handleSubtaskChange,
     addSubtask, removeSubtask, onToggleEdit, onToggleExpansion,
-    handleStartSprint, onTaskStatusChange, onSubtaskStatusChange, isLoading = false,
+    handleStartSprint, onTaskStatusChange, onSubtaskStatusChange,
+    onAddComment, onUpdateComment, onDeleteComment, onDeleteAttachment,
+    comments = [],
+    isLoading = false,
     currentUserRole = "Employee", currentUserId = "", currentUserName = ""
   } = props;
 
   const [selectedSubtask, setSelectedSubtask] = useState<Subtask | null>(null);
+  const [isSubmittingComment, setIsSubmittingComment] = useState(false);
   
-  // Get current user info from localStorage if not provided
   const currentUser = useMemo(() => {
     if (typeof window !== "undefined") {
       return {
@@ -399,7 +1518,6 @@ const TaskModal: React.FC<TaskModalProps> = (props) => {
     return { name: "", id: "", role: "Employee" };
   }, [currentUserName, currentUserId, currentUserRole]);
 
-  // Debug logging
   useEffect(() => {
     if (isOpen) {
       console.log('TaskModal opened:', {
@@ -413,31 +1531,24 @@ const TaskModal: React.FC<TaskModalProps> = (props) => {
     }
   }, [isOpen, task, subtasks, isEditing, currentUser]);
 
-  // Use subtasks from props if editing, otherwise from task
   const subtasksToDisplay = isEditing ? subtasks : (task.subtasks || []);
   
   const totalTime = useMemo(() => sumAllSubtasksTime(subtasksToDisplay), [subtasksToDisplay]);
   const totalPoints = useMemo(() => sumAllSubtasksStoryPoints(subtasksToDisplay), [subtasksToDisplay]);
   const current = isEditing ? draftTask : task;
 
-  // Get task display name - using summary, title, name, or fallback to taskId
   const taskDisplayName = task.displayName || 
                          task.summary || 
                          task.title || 
                          task.name || 
                          `Task ${task.taskId || task._id?.substring(0, 8)}`;
 
-  // Get epic name - prefer epicName, then fallback to project name
   const epicName = task.epicName || task.projectName || 'Epic not specified';
 
-  // Check if current user can edit this task (Admin/Manager always can)
   const canEditTask = useMemo(() => {
     if (currentUser.role === "Admin" || currentUser.role === "Manager") return true;
     
     if (currentUser.role === "Employee") {
-      // Employees can edit task if:
-      // 1. Task is assigned to them, OR
-      // 2. Task has no assignees (unassigned)
       if (!task.assigneeNames || task.assigneeNames.length === 0) return true;
       
       const isAssigned = task.assigneeNames?.some(
@@ -450,14 +1561,10 @@ const TaskModal: React.FC<TaskModalProps> = (props) => {
     return false;
   }, [task, currentUser]);
 
-  // Check if user can edit subtasks in general (for the "Edit Subtasks" button)
   const canEditSubtasks = useMemo(() => {
     if (currentUser.role === "Admin" || currentUser.role === "Manager") return true;
     
     if (currentUser.role === "Employee") {
-      // Employees can edit subtasks if:
-      // 1. They can edit the task itself, OR
-      // 2. There are subtasks assigned to them
       if (canEditTask) return true;
       
       const hasAssignedSubtasks = task.subtasks?.some(
@@ -476,12 +1583,66 @@ const TaskModal: React.FC<TaskModalProps> = (props) => {
     }
   }, [task._id, onSubtaskStatusChange]);
 
+  const handleAddComment = useCallback(async (commentText: string, attachments?: File[]) => {
+    if (!commentText.trim() && (!attachments || attachments.length === 0)) return;
+    
+    setIsSubmittingComment(true);
+    try {
+      await onAddComment(task._id, commentText, attachments);
+    } catch (error) {
+      console.error("Failed to add comment:", error);
+    } finally {
+      setIsSubmittingComment(false);
+    }
+  }, [task._id, onAddComment]);
+
+  const handleUpdateComment = useCallback(async (commentId: string, newText: string, attachments?: File[], removedAttachmentIds?: string[]) => {
+    if (!newText.trim() && (!attachments || attachments.length === 0) && (!removedAttachmentIds || removedAttachmentIds.length === 0)) return;
+    
+    setIsSubmittingComment(true);
+    try {
+      await onUpdateComment(task._id, commentId, newText, attachments, removedAttachmentIds);
+    } catch (error) {
+      console.error("Failed to update comment:", error);
+    } finally {
+      setIsSubmittingComment(false);
+    }
+  }, [task._id, onUpdateComment]);
+
+  const handleDeleteComment = useCallback(async (commentId: string) => {
+    setIsSubmittingComment(true);
+    try {
+      await onDeleteComment(task._id, commentId);
+    } catch (error) {
+      console.error("Failed to delete comment:", error);
+    } finally {
+      setIsSubmittingComment(false);
+    }
+  }, [task._id, onDeleteComment]);
+
+  const handleDeleteAttachment = useCallback(async (commentId: string, attachmentId: string) => {
+    if (!onDeleteAttachment) return;
+    
+    setIsSubmittingComment(true);
+    try {
+      await onDeleteAttachment(task._id, commentId, attachmentId);
+    } catch (error) {
+      console.error("Failed to delete attachment:", error);
+    } finally {
+      setIsSubmittingComment(false);
+    }
+  }, [task._id, onDeleteAttachment]);
+
+  const handleTagEmployee = useCallback((employeeName: string) => {
+    console.log(`Tagged employee: ${employeeName}`);
+  }, []);
+
   if (!isOpen) return null;
   if (isLoading) return <div className="fixed inset-0 z-50 flex items-center justify-center bg-white/60"><Loader2 className="w-12 h-12 animate-spin text-blue-600" /></div>;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-md" onClick={onClose}>
-      <div className="bg-white rounded-[3rem] shadow-2xl flex flex-col w-full max-w-7xl max-h-[80vh] mt-20 overflow-hidden" onClick={e => e.stopPropagation()}>
+      <div className="bg-white rounded-[3rem] shadow-2xl flex flex-col w-full max-w-7xl max-h-[90vh] mt-20 overflow-hidden" onClick={e => e.stopPropagation()}>
         
         {/* Header with epic name */}
         <div className="p-8 border-b border-slate-100 flex justify-between items-center bg-white">
@@ -730,6 +1891,39 @@ const TaskModal: React.FC<TaskModalProps> = (props) => {
                     </div>
                   )}
               </div>
+            </div>
+
+            {/* Comments Section */}
+            <div className="bg-white p-8 rounded-[3rem] border border-slate-100 shadow-sm">
+              <div className="flex items-center justify-between mb-6 pb-4 border-b">
+                <div className="flex items-center gap-2">
+                  <MessageSquare className="w-5 h-5 text-slate-400" />
+                  <h3 className="text-xs font-black text-slate-800 uppercase tracking-[0.2em]">Comments & Discussion</h3>
+                  {comments.length > 0 && (
+                    <span className="text-xs bg-blue-100 text-blue-600 px-2 py-1 rounded-full font-bold">
+                      {comments.length}
+                    </span>
+                  )}
+                </div>
+                <div className="text-xs text-slate-500 flex items-center gap-1">
+                  <AtSign size={12} />
+                  <span>Type @ to mention teammates</span>
+                  <span className="mx-2">•</span>
+                  <Paperclip size={12} />
+                  <span>Drag & drop to upload files</span>
+                </div>
+              </div>
+              
+              <CommentBox
+                comments={comments}
+                employees={employees}
+                currentUser={currentUser}
+                onAddComment={handleAddComment}
+                onUpdateComment={handleUpdateComment}
+                onDeleteComment={handleDeleteComment}
+                onDeleteAttachment={handleDeleteAttachment}
+                onTagEmployee={handleTagEmployee}
+              />
             </div>
 
             {/* Subtasks Section - ALWAYS VISIBLE TO ALL USERS */}

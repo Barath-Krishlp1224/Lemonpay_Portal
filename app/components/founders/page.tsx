@@ -17,7 +17,7 @@ export default function AdminPage() {
   const goToEmployeeList = () => router.push("/components/founders/view-emp");
   const goToBillsPage = () => router.push("/components/founders/bills");
   const goToExpensesPage = () => router.push("/components/founders/expenses");
-  const goToLeavesPage = () => router.push("/components/emp-leave/approval");
+  const goToLeavesPage = () => router.push("/components/founders/leaves");
   const goToAttendancePage = () => router.push("/components/attendance/allday");
 
   const actionCards = [

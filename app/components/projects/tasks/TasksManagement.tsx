@@ -781,7 +781,7 @@ export default function TasksManagement({
               }}
               className="px-4 py-2 bg-[#3fa87d] hover:bg-[#35946d] text-white text-xs font-bold rounded-xl transition-colors flex items-center gap-2"
             >
-              <PlusCircle size={14} /> New Task
+              <PlusCircle size={14} /> New Task or Bug
             </button>
           )}
         </div>

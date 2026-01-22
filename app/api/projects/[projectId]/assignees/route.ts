@@ -42,10 +42,13 @@ export async function POST(
       );
     }
 
-    // Check if employee is the owner
-    if (project.ownerId === employeeId) {
+    // Check if employee is already a member with Admin role
+    const existingAdmin = project.members?.find(member => 
+      member.userId === employeeId && member.role === "Admin"
+    );
+    if (existingAdmin) {
       return NextResponse.json(
-        { error: "Employee is already the project owner" },
+        { error: "Employee is already an Admin member of this project" },
         { status: 400 }
       );
     }
@@ -53,16 +56,23 @@ export async function POST(
     // Add to assigneeIds
     const updatedAssigneeIds = [...(project.assigneeIds || []), employeeId];
 
-    // Add to members as Contributor
+    // Add to members as Contributor (if not already a member)
     const updatedMembers = [...(project.members || [])];
-    const isAlreadyMember = updatedMembers.some(member => member.userId === employeeId);
+    const existingMemberIndex = updatedMembers.findIndex(member => member.userId === employeeId);
     
-    if (!isAlreadyMember) {
+    if (existingMemberIndex === -1) {
+      // Not a member yet, add as Contributor
       updatedMembers.push({
         userId: employeeId,
         role: "Contributor" as const,
         addedAt: new Date()
       });
+    } else {
+      // Already a member, ensure role is at least Contributor
+      if (updatedMembers[existingMemberIndex].role === "Viewer") {
+        updatedMembers[existingMemberIndex].role = "Contributor";
+      }
+      updatedMembers[existingMemberIndex].addedAt = new Date();
     }
 
     // Update project
@@ -111,10 +121,13 @@ export async function DELETE(
       return NextResponse.json({ error: "Project not found" }, { status: 404 });
     }
 
-    // Check if employee is the owner (can't remove owner)
-    if (project.ownerId === employeeId) {
+    // Check if employee is an Admin (can't remove Admins through this endpoint)
+    const isAdmin = project.members?.some(member => 
+      member.userId === employeeId && member.role === "Admin"
+    );
+    if (isAdmin) {
       return NextResponse.json(
-        { error: "Cannot remove project owner from assignees" },
+        { error: "Cannot remove Admin members from assignees. Remove them as members first." },
         { status: 400 }
       );
     }
@@ -130,10 +143,32 @@ export async function DELETE(
     // Remove from assigneeIds
     const updatedAssigneeIds = project.assigneeIds?.filter(aId => aId !== employeeId) || [];
 
-    // Remove from members (if not owner)
-    const updatedMembers = project.members?.filter(member => 
-      !(member.userId === employeeId && member.role !== "Admin")
-    ) || [];
+    // Remove from members if they are only a Contributor or Viewer
+    const updatedMembers = project.members?.filter(member => {
+      if (member.userId === employeeId) {
+        // Keep if they have any tasks assigned or if they're an Admin
+        const hasAssignedTasks = project.tasks?.some(task => task.assigneeId === employeeId);
+        return member.role === "Admin" || hasAssignedTasks;
+      }
+      return true;
+    }) || [];
+
+    // Also update tasks to remove this assignee - use plain JavaScript object spread
+    const updatedTasks = project.tasks?.map(task => {
+      // Create a plain object copy of the task
+      const taskObj = task instanceof mongoose.Document ? task.toObject() : task;
+      
+      if (taskObj.assigneeId === employeeId) {
+        return {
+          ...taskObj,
+          assigneeId: null,
+          assigneeNames: taskObj.assigneeNames?.filter((name: string) => 
+            !name.toLowerCase().includes(employeeId.toLowerCase())
+          ) || []
+        };
+      }
+      return taskObj;
+    }) || [];
 
     // Update project
     const updatedProject = await Project.findByIdAndUpdate(
@@ -141,6 +176,7 @@ export async function DELETE(
       {
         assigneeIds: updatedAssigneeIds,
         members: updatedMembers,
+        tasks: updatedTasks,
         $currentDate: { updatedAt: true }
       },
       { new: true, runValidators: true }

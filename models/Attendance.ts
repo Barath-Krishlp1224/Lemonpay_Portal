@@ -1,11 +1,4 @@
-// models/Attendance.ts
 import mongoose, { Schema, Document, Model } from "mongoose";
-
-export type AttendanceMode =
-  | "IN_OFFICE"
-  | "WORK_FROM_HOME"
-  | "ON_DUTY"
-  | "REGULARIZATION";
 
 export interface IAttendance extends Document {
   employeeId: string;
@@ -14,7 +7,6 @@ export interface IAttendance extends Document {
    * same style used by Hikvision aggregation.
    */
   date: string;
-  mode: AttendanceMode;
 
   punchInTime?: Date;
   punchOutTime?: Date;
@@ -40,13 +32,6 @@ const AttendanceSchema: Schema<IAttendance> = new Schema(
     // 🔹 Important: store as string "YYYY-MM-DD"
     date: { type: String, required: true },
 
-    mode: {
-      type: String,
-      enum: ["IN_OFFICE", "WORK_FROM_HOME", "ON_DUTY", "REGULARIZATION"],
-      required: true,
-      default: "IN_OFFICE",
-    },
-
     // Punch In
     punchInTime: { type: Date },
     punchInImage: { type: String },
@@ -64,8 +49,8 @@ const AttendanceSchema: Schema<IAttendance> = new Schema(
   { timestamps: true }
 );
 
-// 🔹 Ensure unique (employeeId + date + mode) combination
-AttendanceSchema.index({ employeeId: 1, date: 1, mode: 1 }, { unique: true });
+// 🔹 Ensure unique (employeeId + date) combination
+AttendanceSchema.index({ employeeId: 1, date: 1 }, { unique: true });
 
 const Attendance: Model<IAttendance> =
   mongoose.models.Attendance ||

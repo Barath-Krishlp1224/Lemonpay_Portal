@@ -1,4 +1,4 @@
-import mongoose, { Schema, Document } from 'mongoose';
+import mongoose, { Schema, Document, Types } from 'mongoose';
 
 export interface ISubtask {
   id: string;
@@ -22,7 +22,7 @@ export interface ITask extends Document {
   summary: string;
   description?: string;
   issueType: 'Story' | 'Task' | 'Bug';
-  status: string; // Changed from specific enum to string to accommodate all statuses
+  status: string;
   priority: 'Lowest' | 'Low' | 'Medium' | 'High' | 'Highest';
   assigneeIds: string[];
   reporterIds: string[];
@@ -57,6 +57,10 @@ export interface ITask extends Document {
   displayName?: string;
   name?: string;
   title?: string;
+  
+  // Comment related fields
+  commentCount?: number;
+  lastCommentAt?: Date;
 }
 
 // Define all possible task statuses
@@ -68,7 +72,7 @@ const TASK_STATUSES = [
   
   // Ready
   'Todo',
-  'To Do', // Keep both for compatibility
+  'To Do',
   'Ready for Dev',
   
   // Development
@@ -93,7 +97,7 @@ const TASK_STATUSES = [
   
   // Completion
   'Done',
-  'Completed', // Keep both for compatibility
+  'Completed',
   'Closed',
   
   // Issues
@@ -140,7 +144,7 @@ const SubtaskSchema: Schema = new Schema({
     type: String
   },
   subtasks: {
-    type: [this], // Recursive reference
+    type: [this],
     default: []
   },
   createdAt: {
@@ -314,6 +318,15 @@ const TaskSchema: Schema = new Schema({
   title: {
     type: String,
     trim: true
+  },
+  
+  // Comment related fields
+  commentCount: {
+    type: Number,
+    default: 0
+  },
+  lastCommentAt: {
+    type: Date
   }
 }, {
   timestamps: true
@@ -326,5 +339,11 @@ TaskSchema.index({ assigneeIds: 1 });
 TaskSchema.index({ status: 1 });
 TaskSchema.index({ createdAt: -1 });
 TaskSchema.index({ subtasks: 1 });
+TaskSchema.index({ commentCount: -1 });
 
-export default mongoose.models.Task || mongoose.model<ITask>('Task', TaskSchema);
+// Clear existing model if exists
+if (mongoose.models.Task) {
+  delete mongoose.models.Task;
+}
+
+export default mongoose.model<ITask>('Task', TaskSchema);

@@ -3,7 +3,7 @@ import connectDB from '@/lib/mongodb';
 import Project from '@/models/Project';
 import mongoose from 'mongoose';
 
-// Define the type for the params promise - use projectId instead of id
+// Define the type for the params promise
 type RouteParams = Promise<{ projectId: string; employeeId: string }>;
 
 export async function DELETE(
@@ -32,24 +32,48 @@ export async function DELETE(
     }
     
     // Remove from assigneeIds array
-    project.assigneeIds = project.assigneeIds?.filter((aId: any) => 
-      aId.toString() !== employeeId
-    ) || [];
+    if (project.assigneeIds) {
+      project.assigneeIds = project.assigneeIds.filter((aId: string) => 
+        aId !== employeeId
+      );
+    }
     
-    // Remove from members array (except if they are the owner)
-    project.members = project.members?.filter((member: any) => {
-      // Don't remove if this is the owner
-      if (project.ownerId?.toString() === employeeId) {
-        return true;
-      }
-      // Remove if userId matches employeeId
-      return member.userId?.toString() !== employeeId;
-    }) || [];
+    // Remove from members array (don't check for ownerId since it doesn't exist in your model)
+    if (project.members) {
+      project.members = project.members.filter((member: any) => 
+        member.userId !== employeeId
+      );
+    }
+    
+    // Ensure at least one admin remains in members
+    const hasAdmin = project.members?.some((member: any) => member.role === 'Admin');
+    if (!hasAdmin && project.members && project.members.length > 0) {
+      project.members[0].role = 'Admin';
+    }
+    
+    // Update all tasks to remove this assignee
+    if (project.tasks) {
+      project.tasks = project.tasks.map((task: any) => {
+        if (task.assigneeId === employeeId) {
+          return {
+            ...task,
+            assigneeId: null,
+            assigneeNames: task.assigneeNames?.filter((name: string) => 
+              !name.toLowerCase().includes(employeeId.toLowerCase())
+            ) || []
+          };
+        }
+        return task;
+      });
+    }
     
     project.updatedAt = new Date();
     await project.save();
     
-    return NextResponse.json(project);
+    return NextResponse.json({
+      message: 'Employee removed successfully',
+      project
+    });
   } catch (error: any) {
     console.error('Error removing assignee:', error);
     return NextResponse.json(
