@@ -11,7 +11,7 @@ export interface IAttachment {
 }
 
 export interface IComment extends Document {
-  text: string;
+  text?: string;
   userId: string;
   userName: string;
   userRole: string;
@@ -67,7 +67,11 @@ const CommentSchema: Schema = new Schema(
   {
     text: {
       type: String,
-      required: [true, 'Comment text is required'],
+      required: function(this: any): boolean {
+        // Only require text if there are no attachments
+        const attachments = this.attachments || [];
+        return attachments.length === 0;
+      },
       trim: true,
       maxlength: [5000, 'Comment cannot exceed 5000 characters'],
     },
@@ -106,7 +110,7 @@ const CommentSchema: Schema = new Schema(
       type: [AttachmentSchema],
       default: [],
       validate: {
-        validator: function(attachments: IAttachment[]) {
+        validator: function(attachments: IAttachment[]): boolean {
           // Limit to 10 attachments per comment
           return attachments.length <= 10;
         },
@@ -130,7 +134,7 @@ CommentSchema.index({ createdAt: -1 });
 CommentSchema.pre('save', function (next) {
   if (this.isModified('text')) {
     const text = this.get('text');
-    if (typeof text === 'string') {
+    if (typeof text === 'string' && text.trim()) {
       const mentionRegex = /@([a-zA-Z0-9_\s]+)/g;
       const mentions: string[] = [];
       let match: RegExpExecArray | null;
@@ -142,6 +146,9 @@ CommentSchema.pre('save', function (next) {
       }
       
       this.set('mentionedEmployees', [...new Set(mentions)]);
+    } else {
+      // If text is empty, clear mentions
+      this.set('mentionedEmployees', []);
     }
   }
   
