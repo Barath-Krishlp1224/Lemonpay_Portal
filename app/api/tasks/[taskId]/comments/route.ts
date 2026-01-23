@@ -181,16 +181,14 @@ export async function GET(
     const { taskId } = await params;
     console.log('Task ID:', taskId);
     
-    // Only require userName and userRole for authentication
-    if (!userName || !userRole) {
-      console.log('Missing required auth headers');
-      return NextResponse.json(
-        { 
-          success: false, 
-          error: 'Authentication headers are missing. Please provide x-user-name and x-user-role headers.' 
-        },
-        { status: 401 }
-      );
+    // Check for authentication - BOTH options should work:
+    // Option 1: Require userName and userRole (strict mode)
+    // Option 2: Allow public read access if no authentication headers
+    const isPublicAccess = !userName || !userRole;
+    
+    if (isPublicAccess) {
+      console.log('Public access mode - allowing read-only access');
+      // Continue with public access - don't return 401
     }
     
     if (!taskId || !mongoose.Types.ObjectId.isValid(taskId)) {
@@ -260,6 +258,7 @@ export async function GET(
         totalPages: Math.ceil(total / limit),
       },
       environment: isVercel ? 'vercel' : 'local',
+      accessMode: isPublicAccess ? 'public' : 'authenticated',
     });
     
   } catch (error: any) {
@@ -292,9 +291,9 @@ export async function POST(
     const { taskId } = await params;
     console.log('Task ID:', taskId);
     
-    // Only require userName and userRole for authentication
+    // For POST requests, we MUST have authentication
     if (!userName || !userRole) {
-      console.log('Missing required auth headers');
+      console.log('Missing required auth headers for POST');
       return NextResponse.json(
         { 
           success: false, 

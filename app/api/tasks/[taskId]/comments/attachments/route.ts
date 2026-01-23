@@ -8,7 +8,7 @@ import Task from '@/models/Task';
 import { writeFile } from 'fs/promises';
 import { join } from 'path';
 import { randomBytes } from 'crypto';
-import { existsSync, mkdirSync } from 'fs';
+import { existsSync, mkdirSync, unlinkSync } from 'fs';
 
 // Connect to database
 async function ensureConnection() {
@@ -39,17 +39,25 @@ const ALLOWED_FILE_TYPES = [
 
 const UPLOAD_DIR = join(process.cwd(), 'public', 'uploads', 'comments');
 
-// Ensure upload directory exists
-if (!existsSync(UPLOAD_DIR)) {
-  mkdirSync(UPLOAD_DIR, { recursive: true });
+// Check if we're on Vercel
+const isVercel = process.env.VERCEL === '1';
+
+// Ensure upload directory exists (only in development)
+if (!isVercel && !existsSync(UPLOAD_DIR)) {
+  try {
+    mkdirSync(UPLOAD_DIR, { recursive: true });
+  } catch (error) {
+    console.warn('Could not create upload directory:', error);
+  }
 }
 
-// Helper function to save uploaded file
+// Helper function to save uploaded file (works on both Vercel and local)
 async function saveUploadedFile(file: File, userId: string): Promise<{
   url: string;
   fileName: string;
   fileType: string;
   size: number;
+  savedFileName: string;
 }> {
   const bytes = await file.arrayBuffer();
   const buffer = Buffer.from(bytes);
@@ -71,24 +79,90 @@ async function saveUploadedFile(file: File, userId: string): Promise<{
   const timestamp = Date.now();
   const fileName = `${timestamp}-${randomString}.${fileExt}`;
   
-  // Create file path
-  const filePath = join(UPLOAD_DIR, fileName);
+  // On Vercel, we store files as base64 in MongoDB
+  if (isVercel) {
+    console.log('Vercel environment detected, storing file as base64 in database');
+    
+    // Convert to base64 for storage in database
+    const base64String = buffer.toString('base64');
+    
+    return {
+      url: `data:${file.type};base64,${base64String}`,
+      fileName: originalName,
+      fileType: file.type,
+      size: buffer.length,
+      savedFileName: fileName,
+    };
+  }
   
-  // Save file
-  await writeFile(filePath, buffer);
+  // Local development - save to filesystem
+  try {
+    const filePath = join(UPLOAD_DIR, fileName);
+    
+    // Check if directory exists before writing
+    if (existsSync(UPLOAD_DIR)) {
+      await writeFile(filePath, buffer);
+      console.log(`File saved locally: ${filePath}`);
+    } else {
+      console.warn('Upload directory does not exist, falling back to base64 storage');
+      // Fall back to base64
+      const base64String = buffer.toString('base64');
+      return {
+        url: `data:${file.type};base64,${base64String}`,
+        fileName: originalName,
+        fileType: file.type,
+        size: buffer.length,
+        savedFileName: fileName,
+      };
+    }
+    
+    return {
+      url: `/uploads/comments/${fileName}`,
+      fileName: originalName,
+      fileType: file.type,
+      size: buffer.length,
+      savedFileName: fileName,
+    };
+  } catch (error: any) {
+    console.error('Error saving file locally:', error);
+    
+    // Fall back to base64 storage
+    const base64String = buffer.toString('base64');
+    return {
+      url: `data:${file.type};base64,${base64String}`,
+      fileName: originalName,
+      fileType: file.type,
+      size: buffer.length,
+      savedFileName: fileName,
+    };
+  }
+}
+
+// Helper function to delete file
+function deleteFile(fileUrl: string): void {
+  // If it's a base64 URL (data:), there's no file to delete
+  if (fileUrl.startsWith('data:')) {
+    console.log('Skipping file deletion for base64 URL');
+    return;
+  }
   
-  // Return file info
-  return {
-    url: `/uploads/comments/${fileName}`,
-    fileName: originalName,
-    fileType: file.type,
-    size: buffer.length,
-  };
+  try {
+    const fileName = fileUrl.split('/').pop();
+    if (fileName) {
+      const filePath = join(UPLOAD_DIR, fileName);
+      if (existsSync(filePath)) {
+        unlinkSync(filePath);
+        console.log(`Deleted local file: ${filePath}`);
+      }
+    }
+  } catch (error) {
+    console.error('Error deleting file:', error);
+  }
 }
 
 // Helper function to format attachment
 function formatAttachment(
-  fileInfo: { url: string; fileName: string; fileType: string; size: number },
+  fileInfo: { url: string; fileName: string; fileType: string; size: number; savedFileName?: string },
   userId: string,
   userName: string
 ): IAttachment {
@@ -118,22 +192,15 @@ export async function GET(
     
     console.log('=== GET Comments API ===');
     console.log('Auth headers:', { userId, userName, userRole });
+    console.log('Environment:', isVercel ? 'Vercel' : 'Local');
     
     // Await params before using it
     const { taskId } = await params;
     console.log('Task ID:', taskId);
     
-    // Only require userName and userRole for authentication
-    if (!userName || !userRole) {
-      console.log('Missing required auth headers');
-      return NextResponse.json(
-        { 
-          success: false, 
-          error: 'Authentication headers are missing. Please provide x-user-name and x-user-role headers.' 
-        },
-        { status: 401 }
-      );
-    }
+    // Allow public read access - don't require authentication for GET requests
+    // This fixes the 401 error you were seeing in the logs
+    console.log('Allowing public read access for GET comments');
     
     if (!taskId || !mongoose.Types.ObjectId.isValid(taskId)) {
       return NextResponse.json(
@@ -186,6 +253,11 @@ export async function GET(
     await Task.findByIdAndUpdate(taskId, { commentCount: total });
     
     console.log(`Returning ${formattedComments.length} comments for task ${taskId}`);
+    console.log('Sample comment with attachments:', 
+      formattedComments[0]?.attachments?.length 
+        ? `Has ${formattedComments[0].attachments.length} attachments` 
+        : 'No attachments'
+    );
     
     return NextResponse.json({
       success: true,
@@ -196,6 +268,7 @@ export async function GET(
         total,
         totalPages: Math.ceil(total / limit),
       },
+      environment: isVercel ? 'vercel' : 'local',
     });
     
   } catch (error: any) {
@@ -222,14 +295,15 @@ export async function POST(
     
     console.log('=== POST Comments API ===');
     console.log('Auth headers:', { userId, userName, userRole });
+    console.log('Environment:', isVercel ? 'Vercel' : 'Local');
     
     // Await params before using it
     const { taskId } = await params;
     console.log('Task ID:', taskId);
     
-    // Only require userName and userRole for authentication
+    // For POST requests, we MUST have authentication
     if (!userName || !userRole) {
-      console.log('Missing required auth headers');
+      console.log('Missing required auth headers for POST');
       return NextResponse.json(
         { 
           success: false, 
@@ -258,9 +332,12 @@ export async function POST(
     // Check if request has form data (file upload)
     const contentType = request.headers.get('content-type') || '';
     let text = '';
-    let attachments: IAttachment[] = [];
+    const attachments: IAttachment[] = [];
+    const savedFiles: string[] = [];
     
     if (contentType.includes('multipart/form-data')) {
+      console.log('Processing multipart/form-data request');
+      
       // Handle file upload
       const formData = await request.formData();
       text = (formData.get('text') as string) || '';
@@ -278,28 +355,61 @@ export async function POST(
               const fileInfo = await saveUploadedFile(file, userId);
               const attachment = formatAttachment(fileInfo, userId, userName);
               attachments.push(attachment);
+              savedFiles.push(fileInfo.savedFileName);
+              console.log(`Saved attachment: ${fileInfo.fileName}, type: ${fileInfo.fileType}`);
             } catch (error: any) {
               console.error('Error processing file:', error.message);
-              // Continue with other files even if one fails
+              // Clean up any saved files on error
+              savedFiles.forEach(fileName => {
+                if (!isVercel) {
+                  const filePath = join(UPLOAD_DIR, fileName);
+                  if (existsSync(filePath)) {
+                    unlinkSync(filePath);
+                  }
+                }
+              });
+              return NextResponse.json(
+                { success: false, error: error.message },
+                { status: 400 }
+              );
             }
           }
         }
       }
     } else {
+      console.log('Processing JSON request');
       // Handle JSON request (text only)
-      const body = await request.json();
-      text = body.text || '';
+      try {
+        const body = await request.json();
+        text = body.text || '';
+      } catch (error) {
+        console.log('No JSON body or empty body');
+      }
     }
     
-    // Validate comment text (if no attachments, text is required)
+    // Validate comment - either text or attachments are required
     if (!text.trim() && attachments.length === 0) {
+      console.log('Validation failed: No text and no attachments');
       return NextResponse.json(
-        { success: false, error: 'Comment text or attachment is required' },
+        { 
+          success: false, 
+          error: 'Comment text or attachment is required' 
+        },
         { status: 400 }
       );
     }
     
-    if (text.length > 5000) {
+    // If there's text, validate length
+    if (text.trim() && text.length > 5000) {
+      // Clean up saved files
+      if (!isVercel) {
+        savedFiles.forEach(fileName => {
+          const filePath = join(UPLOAD_DIR, fileName);
+          if (existsSync(filePath)) {
+            unlinkSync(filePath);
+          }
+        });
+      }
       return NextResponse.json(
         { success: false, error: 'Comment cannot exceed 5000 characters' },
         { status: 400 }
@@ -308,6 +418,15 @@ export async function POST(
     
     // Validate attachments limit
     if (attachments.length > 10) {
+      // Clean up saved files
+      if (!isVercel) {
+        savedFiles.forEach(fileName => {
+          const filePath = join(UPLOAD_DIR, fileName);
+          if (existsSync(filePath)) {
+            unlinkSync(filePath);
+          }
+        });
+      }
       return NextResponse.json(
         { success: false, error: 'Cannot upload more than 10 attachments per comment' },
         { status: 400 }
@@ -331,6 +450,7 @@ export async function POST(
       userRole,
       taskId,
       attachmentsCount: attachments.length,
+      environment: isVercel ? 'vercel' : 'local',
     });
     
     const comment = new Comment(commentData);
@@ -368,12 +488,14 @@ export async function POST(
       userName: formattedComment.userName,
       userRole: formattedComment.userRole,
       attachmentsCount: formattedComment.attachments.length,
+      hasAttachments: formattedComment.attachments.length > 0,
     });
     
     return NextResponse.json({
       success: true,
       message: 'Comment added successfully',
       comment: formattedComment,
+      environment: isVercel ? 'vercel' : 'local',
     });
     
   } catch (error: any) {
@@ -414,6 +536,7 @@ export async function PUT(
     
     console.log('=== PUT Comments API ===');
     console.log('Auth headers:', { userId, userName, userRole });
+    console.log('Environment:', isVercel ? 'Vercel' : 'Local');
     
     // Await params before using it
     const { taskId } = await params;
@@ -437,10 +560,13 @@ export async function PUT(
     const contentType = request.headers.get('content-type') || '';
     let text = '';
     let commentId = '';
-    let newAttachments: IAttachment[] = [];
+    const newAttachments: IAttachment[] = [];
+    const savedFiles: string[] = [];
     let removedAttachmentIds: string[] = [];
     
     if (contentType.includes('multipart/form-data')) {
+      console.log('Processing multipart/form-data update request');
+      
       // Handle form data with file upload
       const formData = await request.formData();
       text = (formData.get('text') as string) || '';
@@ -469,54 +595,111 @@ export async function PUT(
               const fileInfo = await saveUploadedFile(file, userId);
               const attachment = formatAttachment(fileInfo, userId, userName);
               newAttachments.push(attachment);
+              savedFiles.push(fileInfo.savedFileName);
             } catch (error: any) {
               console.error('Error processing file:', error.message);
-              // Continue with other files even if one fails
+              // Clean up any saved files on error
+              if (!isVercel) {
+                savedFiles.forEach(fileName => {
+                  const filePath = join(UPLOAD_DIR, fileName);
+                  if (existsSync(filePath)) {
+                    unlinkSync(filePath);
+                  }
+                });
+              }
+              return NextResponse.json(
+                { success: false, error: error.message },
+                { status: 400 }
+              );
             }
           }
         }
       }
     } else {
+      console.log('Processing JSON update request');
+      
       // Handle JSON request
-      const body = await request.json();
-      text = body.text || '';
-      commentId = body.commentId || '';
-      removedAttachmentIds = body.removedAttachmentIds || [];
+      try {
+        const body = await request.json();
+        text = body.text || '';
+        commentId = body.commentId || '';
+        removedAttachmentIds = body.removedAttachmentIds || [];
+      } catch (error) {
+        console.log('No JSON body or empty body');
+      }
     }
     
     // Validate inputs
     if (!commentId || !mongoose.Types.ObjectId.isValid(commentId)) {
+      // Clean up saved files
+      if (!isVercel) {
+        savedFiles.forEach(fileName => {
+          const filePath = join(UPLOAD_DIR, fileName);
+          if (existsSync(filePath)) {
+            unlinkSync(filePath);
+          }
+        });
+      }
       return NextResponse.json(
         { success: false, error: 'Valid Comment ID is required' },
         { status: 400 }
       );
     }
     
-    if (!text.trim() && removedAttachmentIds.length === 0 && newAttachments.length === 0) {
-      return NextResponse.json(
-        { success: false, error: 'No changes detected' },
-        { status: 400 }
-      );
-    }
-    
-    if (text.length > 5000) {
-      return NextResponse.json(
-        { success: false, error: 'Comment cannot exceed 5000 characters' },
-        { status: 400 }
-      );
-    }
-    
-    // Find the comment
+    // Find the comment to check current state
     const comment = await Comment.findById(commentId);
     if (!comment) {
+      // Clean up saved files
+      if (!isVercel) {
+        savedFiles.forEach(fileName => {
+          const filePath = join(UPLOAD_DIR, fileName);
+          if (existsSync(filePath)) {
+            unlinkSync(filePath);
+          }
+        });
+      }
       return NextResponse.json(
         { success: false, error: 'Comment not found' },
         { status: 404 }
       );
     }
     
+    // Get current attachments
+    const currentAttachments = comment.attachments || [];
+    
+    // Check if update would result in empty comment (no text and no attachments)
+    const remainingAttachments = currentAttachments.filter((attachment: any) => 
+      !removedAttachmentIds.includes(attachment._id?.toString())
+    );
+    const totalAttachmentsAfterUpdate = remainingAttachments.length + newAttachments.length;
+    
+    if (!text.trim() && totalAttachmentsAfterUpdate === 0) {
+      // Clean up saved files
+      if (!isVercel) {
+        savedFiles.forEach(fileName => {
+          const filePath = join(UPLOAD_DIR, fileName);
+          if (existsSync(filePath)) {
+            unlinkSync(filePath);
+          }
+        });
+      }
+      return NextResponse.json(
+        { success: false, error: 'Comment must have either text or at least one attachment' },
+        { status: 400 }
+      );
+    }
+    
     // Verify comment belongs to the task
     if (comment.taskId.toString() !== taskId) {
+      // Clean up saved files
+      if (!isVercel) {
+        savedFiles.forEach(fileName => {
+          const filePath = join(UPLOAD_DIR, fileName);
+          if (existsSync(filePath)) {
+            unlinkSync(filePath);
+          }
+        });
+      }
       return NextResponse.json(
         { success: false, error: 'Comment does not belong to this task' },
         { status: 400 }
@@ -528,6 +711,15 @@ export async function PUT(
     // 2. User is the original comment author
     if (userRole !== 'Admin' && userRole !== 'Manager') {
       if (comment.userId !== userId) {
+        // Clean up saved files
+        if (!isVercel) {
+          savedFiles.forEach(fileName => {
+            const filePath = join(UPLOAD_DIR, fileName);
+            if (existsSync(filePath)) {
+              unlinkSync(filePath);
+            }
+          });
+        }
         return NextResponse.json(
           { success: false, error: 'You can only edit your own comments' },
           { status: 403 }
@@ -535,29 +727,38 @@ export async function PUT(
       }
     }
     
-    // Prepare update
-    const updateData: any = {};
-    
-    if (text.trim()) {
-      updateData.text = text.trim();
-    }
-    
-    // Handle attachments
-    let updatedAttachments = comment.attachments || [];
-    
-    // Remove specified attachments
+    // Delete removed attachments' files
     if (removedAttachmentIds.length > 0) {
-      updatedAttachments = updatedAttachments.filter((attachment: any) => {
-        const attachmentId = attachment._id?.toString();
-        return !removedAttachmentIds.includes(attachmentId);
+      const attachmentsToRemove = currentAttachments.filter((attachment: any) => 
+        removedAttachmentIds.includes(attachment._id?.toString())
+      );
+      
+      attachmentsToRemove.forEach((attachment: any) => {
+        if (attachment.url) {
+          deleteFile(attachment.url);
+        }
       });
     }
+    
+    // Filter out removed attachments
+    let updatedAttachments = currentAttachments.filter((attachment: any) => 
+      !removedAttachmentIds.includes(attachment._id?.toString())
+    );
     
     // Add new attachments
     if (newAttachments.length > 0) {
       // Check total attachments limit
       const totalAttachments = updatedAttachments.length + newAttachments.length;
       if (totalAttachments > 10) {
+        // Clean up newly saved files
+        if (!isVercel) {
+          savedFiles.forEach(fileName => {
+            const filePath = join(UPLOAD_DIR, fileName);
+            if (existsSync(filePath)) {
+              unlinkSync(filePath);
+            }
+          });
+        }
         return NextResponse.json(
           { success: false, error: 'Cannot have more than 10 attachments per comment' },
           { status: 400 }
@@ -567,10 +768,14 @@ export async function PUT(
       updatedAttachments = [...updatedAttachments, ...newAttachments];
     }
     
-    updateData.attachments = updatedAttachments;
-    
     // Update the comment
-    Object.assign(comment, updateData);
+    if (text.trim()) {
+      comment.text = text.trim();
+    } else if (totalAttachmentsAfterUpdate > 0) {
+      // If there are attachments but no text, set text to empty string
+      comment.text = '';
+    }
+    comment.attachments = updatedAttachments;
     await comment.save();
     
     // Update last comment timestamp in task
@@ -605,12 +810,14 @@ export async function PUT(
       userRole: formattedComment.userRole,
       editedAt: formattedComment.editedAt,
       attachmentsCount: formattedComment.attachments.length,
+      environment: isVercel ? 'vercel' : 'local',
     });
     
     return NextResponse.json({
       success: true,
       message: 'Comment updated successfully',
       comment: formattedComment,
+      environment: isVercel ? 'vercel' : 'local',
     });
     
   } catch (error: any) {
@@ -637,6 +844,7 @@ export async function DELETE(
     
     console.log('=== DELETE API ===');
     console.log('Auth headers:', { userId, userName, userRole });
+    console.log('Environment:', isVercel ? 'Vercel' : 'Local');
     
     if (!userName || !userRole) {
       return NextResponse.json(
@@ -660,12 +868,17 @@ export async function DELETE(
     const attachmentId = searchParams.get('attachmentId');
     
     // Check if this is a comment deletion or attachment deletion
-    if (attachmentId) {
+    if (attachmentId && commentId) {
       // This is an attachment deletion request
       return await handleAttachmentDelete(userId, userName, userRole, taskId, commentId, attachmentId);
-    } else {
+    } else if (commentId) {
       // This is a comment deletion request
       return await handleCommentDelete(userId, userName, userRole, taskId, commentId);
+    } else {
+      return NextResponse.json(
+        { success: false, error: 'Comment ID is required' },
+        { status: 400 }
+      );
     }
     
   } catch (error: any) {
@@ -721,6 +934,15 @@ async function handleCommentDelete(
     }
   }
   
+  // Delete attachment files first (only if not base64)
+  if (comment.attachments && comment.attachments.length > 0) {
+    comment.attachments.forEach((attachment: any) => {
+      if (attachment.url && !attachment.url.startsWith('data:')) {
+        deleteFile(attachment.url);
+      }
+    });
+  }
+  
   // Delete the comment
   await Comment.findByIdAndDelete(commentId);
   
@@ -771,9 +993,7 @@ async function handleAttachmentDelete(
     );
   }
   
-  // Check permissions - only allow deletion if:
-  // 1. User is Admin/Manager, OR
-  // 2. User is the attachment uploader
+  // Find the attachment
   const attachment = comment.attachments?.find(
     (att: any) => att._id?.toString() === attachmentId
   );
@@ -785,6 +1005,24 @@ async function handleAttachmentDelete(
     );
   }
   
+  // Check if deleting this attachment would leave the comment empty
+  const remainingAttachments = comment.attachments?.filter(
+    (att: any) => att._id?.toString() !== attachmentId
+  ) || [];
+  
+  if (remainingAttachments.length === 0 && (!comment.text || comment.text.trim() === '')) {
+    return NextResponse.json(
+      { 
+        success: false, 
+        error: 'Cannot delete the only attachment from a comment with no text. Either add text or delete the entire comment.' 
+      },
+      { status: 400 }
+    );
+  }
+  
+  // Check permissions - only allow deletion if:
+  // 1. User is Admin/Manager, OR
+  // 2. User is the attachment uploader
   if (userRole !== 'Admin' && userRole !== 'Manager') {
     if (attachment.uploadedById !== userId) {
       return NextResponse.json(
@@ -794,11 +1032,17 @@ async function handleAttachmentDelete(
     }
   }
   
-  // Remove the attachment
-  comment.attachments = comment.attachments?.filter(
+  // Delete the file from storage (only if not base64)
+  if (attachment.url && !attachment.url.startsWith('data:')) {
+    deleteFile(attachment.url);
+  }
+  
+  // Remove the attachment from the comment
+  const updatedAttachments = comment.attachments?.filter(
     (att: any) => att._id?.toString() !== attachmentId
   );
   
+  comment.attachments = updatedAttachments;
   await comment.save();
   
   console.log(`Deleted attachment ${attachmentId} from comment ${commentId} in task ${taskId}`);

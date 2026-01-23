@@ -11,7 +11,8 @@ import {
   User, AlertTriangle, Bug, ClipboardCheck, Bookmark,
   Archive, Layers, BarChart, PieChart, ListTree,
   UserCircle, Mail, Phone, Briefcase, MapPin,
-  CheckSquare, Square
+  CheckSquare, Square, Upload, Image, File, Download,
+  Maximize2
 } from "lucide-react";
 import type { Employee, SavedProject, Task as TaskType, Epic } from "@/app/types/project";
 
@@ -26,6 +27,38 @@ interface Subtask {
   createdAt: string;
   updatedAt: string;
   description?: string;
+}
+
+interface TaskComment {
+  _id: string;
+  userId: string;
+  userName: string;
+  userEmail?: string;
+  userRole?: string;
+  content: string;
+  attachments?: TaskAttachment[];
+  createdAt: string;
+  updatedAt: string;
+  text?: string;
+}
+
+interface TaskAttachment {
+  _id: string;
+  id?: string;
+  fileName: string;
+  url: string;
+  fileUrl?: string;
+  size?: number;
+  fileSize?: number;
+  fileType?: string;
+  mimeType?: string;
+  uploadedBy?: string;
+  uploadedById?: string;
+  uploadedByName?: string;
+  uploadedAt?: string;
+  createdAt?: string;
+  taskId?: string;
+  commentId?: string;
 }
 
 interface Task {
@@ -52,7 +85,7 @@ interface Task {
   dueDate: string;
   duration: number;
   attachments: string[];
-  comments: Comment[];
+  comments: TaskComment[];
   subtasks?: Subtask[];
   projectId: string;
   projectName: string;
@@ -61,14 +94,6 @@ interface Task {
   updatedAt: string;
   estimatedHours?: number;
   actualHours?: number;
-}
-
-interface Comment {
-  _id: string;
-  userId: string;
-  userName: string;
-  content: string;
-  createdAt: string;
 }
 
 interface TasksManagementProps {
@@ -119,6 +144,20 @@ export default function TasksManagement({
   // --- View Mode State ---
   const [viewTaskId, setViewTaskId] = useState<string | null>(null);
   const [isViewMode, setIsViewMode] = useState(false);
+  
+  // --- Comments & Attachments State ---
+  const [taskComments, setTaskComments] = useState<TaskComment[]>([]);
+  const [taskAttachments, setTaskAttachments] = useState<TaskAttachment[]>([]);
+  const [loadingComments, setLoadingComments] = useState(false);
+  const [loadingAttachments, setLoadingAttachments] = useState(false);
+  const [newComment, setNewComment] = useState("");
+  const [uploadingComment, setUploadingComment] = useState(false);
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+  const [expandedComments, setExpandedComments] = useState<Set<string>>(new Set());
+  
+  // --- Attachment Viewer State ---
+  const [viewingAttachment, setViewingAttachment] = useState<TaskAttachment | null>(null);
+  const [viewerUrl, setViewerUrl] = useState<string>("");
 
   // --- Missing Functions ---
   const handleAddLabel = useCallback(() => {
@@ -178,6 +217,490 @@ export default function TasksManagement({
       }
     });
   }, []);
+
+  // Fetch comments for a specific task
+  const fetchTaskComments = async (taskId: string) => {
+    if (!taskId) return;
+    
+    setLoadingComments(true);
+    try {
+      const response = await fetch(`/api/tasks/${taskId}/comments`);
+      
+      if (!response.ok) {
+        if (response.status === 401) {
+          console.log('Comments API returned 401, trying public access...');
+          setTaskComments([]);
+          return;
+        }
+        throw new Error(`Failed to fetch comments: ${response.status}`);
+      }
+      
+      const data = await response.json();
+      console.log('Comments API response:', data);
+      
+      let commentsArray: any[] = [];
+      
+      if (Array.isArray(data)) {
+        commentsArray = data;
+      } else if (data && Array.isArray(data.data)) {
+        commentsArray = data.data;
+      } else if (data && Array.isArray(data.comments)) {
+        commentsArray = data.comments;
+      } else if (data && data.success && Array.isArray(data.data)) {
+        commentsArray = data.data;
+      } else if (data && data.success && Array.isArray(data.comments)) {
+        commentsArray = data.comments;
+      } else if (data && data.comment) {
+        commentsArray = [data.comment];
+      }
+      
+      // Process comments to ensure they have proper structure
+      const processedComments: TaskComment[] = commentsArray.map(comment => {
+        const employee = employees.find(emp => emp._id === comment.userId);
+        const content = comment.content || comment.text || '';
+        
+        // Process attachments if present
+        let attachments: TaskAttachment[] = [];
+        if (comment.attachments && Array.isArray(comment.attachments)) {
+          attachments = comment.attachments.map((att: any) => {
+            const attachment: TaskAttachment = {
+              _id: att._id || att.id || `att-${Date.now()}`,
+              id: att.id || att._id,
+              fileName: att.fileName || att.name || 'unnamed_file',
+              url: att.url || att.fileUrl || '',
+              fileUrl: att.fileUrl || att.url,
+              size: att.size || att.fileSize,
+              fileSize: att.size || att.fileSize,
+              fileType: att.fileType || att.mimeType || 'application/octet-stream',
+              mimeType: att.mimeType || att.fileType,
+              uploadedBy: att.uploadedBy || att.uploadedById,
+              uploadedById: att.uploadedById,
+              uploadedByName: att.uploadedByName || att.uploadedBy || 'Unknown',
+              uploadedAt: att.uploadedAt || att.createdAt,
+              createdAt: att.createdAt || att.uploadedAt || new Date().toISOString(),
+              taskId: taskId,
+              commentId: comment._id
+            };
+            return attachment;
+          });
+        }
+        
+        return {
+          _id: comment._id || comment.id,
+          userId: comment.userId,
+          userName: comment.userName || employee?.name || 'Unknown',
+          userEmail: comment.userEmail || employee?.email,
+          userRole: comment.userRole || employee?.role,
+          content: content,
+          text: content,
+          attachments: attachments,
+          createdAt: comment.createdAt,
+          updatedAt: comment.updatedAt || comment.createdAt
+        };
+      });
+      
+      console.log('Processed comments with attachments:', processedComments);
+      setTaskComments(processedComments);
+      
+      // Also extract attachments from comments for the attachments section
+      const allAttachments: TaskAttachment[] = [];
+      processedComments.forEach(comment => {
+        if (comment.attachments && comment.attachments.length > 0) {
+          allAttachments.push(...comment.attachments);
+        }
+      });
+      
+      // Remove duplicates based on _id or url
+      const uniqueAttachments = allAttachments.filter((att, index, self) =>
+        index === self.findIndex((t) => (
+          t._id === att._id || 
+          t.url === att.url ||
+          (t.fileName === att.fileName && t.createdAt === att.createdAt)
+        ))
+      );
+      
+      console.log('All unique attachments:', uniqueAttachments);
+      setTaskAttachments(uniqueAttachments);
+      
+    } catch (err: any) {
+      console.error("Failed to fetch comments:", err);
+      setMessage("❌ Failed to load comments and attachments");
+      setTaskComments([]);
+      setTaskAttachments([]);
+    } finally {
+      setLoadingComments(false);
+      setLoadingAttachments(false);
+    }
+  };
+
+  // Alternative: Fetch attachments directly if there's a separate endpoint
+  const fetchAttachmentsDirectly = async (taskId: string) => {
+    if (!taskId) return;
+    
+    setLoadingAttachments(true);
+    try {
+      // Try direct attachments endpoint if it exists
+      const response = await fetch(`/api/tasks/${taskId}/attachments`);
+      
+      if (response.ok) {
+        const data = await response.json();
+        console.log('Direct attachments API response:', data);
+        
+        let attachmentsArray: any[] = [];
+        
+        if (Array.isArray(data)) {
+          attachmentsArray = data;
+        } else if (data && Array.isArray(data.data)) {
+          attachmentsArray = data.data;
+        } else if (data && Array.isArray(data.attachments)) {
+          attachmentsArray = data.attachments;
+        } else if (data && data.success && Array.isArray(data.data)) {
+          attachmentsArray = data.data;
+        }
+        
+        const processedAttachments: TaskAttachment[] = attachmentsArray.map((att: any) => ({
+          _id: att._id || att.id || `att-${Date.now()}`,
+          id: att.id || att._id,
+          fileName: att.fileName || att.name || 'unnamed_file',
+          url: att.url || att.fileUrl || '',
+          fileUrl: att.fileUrl || att.url,
+          size: att.size || att.fileSize,
+          fileSize: att.size || att.fileSize,
+          fileType: att.fileType || att.mimeType || 'application/octet-stream',
+          mimeType: att.mimeType || att.fileType,
+          uploadedBy: att.uploadedBy || att.uploadedById,
+          uploadedById: att.uploadedById,
+          uploadedByName: att.uploadedByName || att.uploadedBy || 'Unknown',
+          uploadedAt: att.uploadedAt || att.createdAt,
+          createdAt: att.createdAt || att.uploadedAt || new Date().toISOString(),
+          taskId: taskId,
+          commentId: att.commentId
+        }));
+        
+        console.log('Directly fetched attachments:', processedAttachments);
+        setTaskAttachments(processedAttachments);
+      } else if (response.status === 404 || response.status === 401) {
+        console.log('Direct attachments endpoint not available, using comments as fallback');
+        // Fallback to comments-based attachments
+        fetchTaskComments(taskId);
+      } else {
+        throw new Error(`Direct attachments failed: ${response.status}`);
+      }
+    } catch (err: any) {
+      console.error("Failed to fetch attachments directly:", err);
+      console.log('Falling back to comments-based attachments');
+      // Fallback to comments-based attachments
+      fetchTaskComments(taskId);
+    } finally {
+      setLoadingAttachments(false);
+    }
+  };
+
+  // Handle file selection for comment attachments
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (files) {
+      const fileArray = Array.from(files);
+      setSelectedFiles(prev => [...prev, ...fileArray]);
+    }
+  };
+
+  // Remove selected file
+  const handleRemoveFile = (index: number) => {
+    setSelectedFiles(prev => prev.filter((_, i) => i !== index));
+  };
+
+  // Submit new comment with attachments
+  const handleSubmitComment = async (taskId: string) => {
+    const commentText = newComment.trim();
+    if (!commentText && selectedFiles.length === 0) return;
+    
+    setUploadingComment(true);
+    try {
+      const currentEmployee = employees[0] || { _id: 'unknown', name: 'Anonymous', role: 'User' };
+      
+      const formData = new FormData();
+      formData.append('text', commentText);
+      
+      // Add auth headers through form data
+      formData.append('userId', currentEmployee._id);
+      formData.append('userName', currentEmployee.name);
+      formData.append('userRole', currentEmployee.role || 'User');
+      
+      // Append files
+      selectedFiles.forEach(file => {
+        formData.append('attachments', file);
+      });
+
+      const response = await fetch(`/api/tasks/${taskId}/comments`, {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
+        throw new Error(`Failed to post comment: ${response.status} - ${errorData.error || 'Unknown error'}`);
+      }
+
+      const data = await response.json();
+      console.log('Comment posted:', data);
+
+      // Refresh comments and attachments
+      await fetchTaskComments(taskId);
+      
+      // Clear form
+      setNewComment('');
+      setSelectedFiles([]);
+      
+      setMessage("✅ Comment added successfully!");
+      setTimeout(() => setMessage(''), 3000);
+    } catch (err: any) {
+      console.error("Failed to post comment:", err);
+      setMessage(`❌ Failed to post comment: ${err.message}`);
+      setTimeout(() => setMessage(''), 5000);
+    } finally {
+      setUploadingComment(false);
+    }
+  };
+
+  // Delete a comment
+  const handleDeleteComment = async (taskId: string, commentId: string) => {
+    if (!confirm("Are you sure you want to delete this comment?")) return;
+    
+    try {
+      const currentEmployee = employees[0] || { _id: 'unknown', name: 'Anonymous', role: 'User' };
+      
+      const response = await fetch(`/api/tasks/${taskId}/comments?commentId=${commentId}`, {
+        method: 'DELETE',
+        headers: {
+          'x-user-id': currentEmployee._id,
+          'x-user-name': currentEmployee.name,
+          'x-user-role': currentEmployee.role || 'User'
+        }
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to delete comment: ${response.status}`);
+      }
+
+      // Refresh comments and attachments
+      await fetchTaskComments(taskId);
+      
+      setMessage("✅ Comment deleted successfully!");
+      setTimeout(() => setMessage(''), 3000);
+    } catch (err: any) {
+      console.error("Failed to delete comment:", err);
+      setMessage("❌ Failed to delete comment");
+      setTimeout(() => setMessage(''), 5000);
+    }
+  };
+
+  // Delete an attachment
+  const handleDeleteAttachment = async (taskId: string, attachmentId: string, commentId?: string) => {
+    if (!confirm("Are you sure you want to delete this attachment?")) return;
+    
+    try {
+      const currentEmployee = employees[0] || { _id: 'unknown', name: 'Anonymous', role: 'User' };
+      
+      // Try direct attachment deletion endpoint first
+      let response;
+      let url;
+      
+      if (commentId) {
+        // Delete attachment from comment
+        url = `/api/tasks/${taskId}/comments?commentId=${commentId}&attachmentId=${attachmentId}`;
+      } else {
+        // Try direct attachment endpoint
+        url = `/api/tasks/${taskId}/attachments?attachmentId=${attachmentId}`;
+      }
+      
+      response = await fetch(url, {
+        method: 'DELETE',
+        headers: {
+          'x-user-id': currentEmployee._id,
+          'x-user-name': currentEmployee.name,
+          'x-user-role': currentEmployee.role || 'User'
+        }
+      });
+
+      if (!response.ok) {
+        // Try alternative endpoint
+        const altUrl = `/api/tasks/${taskId}/attachments/${attachmentId}`;
+        response = await fetch(altUrl, {
+          method: 'DELETE',
+          headers: {
+            'x-user-id': currentEmployee._id,
+            'x-user-name': currentEmployee.name,
+            'x-user-role': currentEmployee.role || 'User'
+          }
+        });
+        
+        if (!response.ok) {
+          throw new Error(`Failed to delete attachment: ${response.status}`);
+        }
+      }
+
+      // Refresh attachments
+      await fetchTaskComments(taskId);
+      
+      setMessage("✅ Attachment deleted successfully!");
+      setTimeout(() => setMessage(''), 3000);
+    } catch (err: any) {
+      console.error("Failed to delete attachment:", err);
+      setMessage("❌ Failed to delete attachment");
+      setTimeout(() => setMessage(''), 5000);
+    }
+  };
+
+  // View attachment (open in new tab or modal)
+  const handleViewAttachment = (attachment: TaskAttachment) => {
+    if (!attachment.url) {
+      setMessage("❌ No URL available for this file");
+      setTimeout(() => setMessage(''), 3000);
+      return;
+    }
+    
+    // For images and PDFs, we can show in a modal
+    const fileType = attachment.fileType || attachment.mimeType || '';
+    const isImage = fileType.startsWith('image/');
+    const isPDF = fileType.includes('pdf');
+    
+    if (isImage || isPDF) {
+      // Open in a modal for better viewing experience
+      setViewingAttachment(attachment);
+      setViewerUrl(attachment.url);
+    } else {
+      // For other file types, open in new tab
+      window.open(attachment.url, '_blank', 'noopener,noreferrer');
+    }
+  };
+
+  // Close attachment viewer modal
+  const closeAttachmentViewer = () => {
+    setViewingAttachment(null);
+    setViewerUrl("");
+  };
+
+  // Download attachment
+  const handleDownloadAttachment = (attachment: TaskAttachment) => {
+    if (!attachment.url) {
+      setMessage("❌ No download URL available for this file");
+      setTimeout(() => setMessage(''), 3000);
+      return;
+    }
+    
+    // Create a temporary anchor element
+    const link = document.createElement('a');
+    link.href = attachment.url;
+    link.download = attachment.fileName;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    
+    // Append to body, click, and remove
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    
+    setMessage(`⬇️ Downloading ${attachment.fileName}...`);
+    setTimeout(() => setMessage(''), 3000);
+  };
+
+  // Toggle comment expansion
+  const toggleCommentExpansion = (commentId: string) => {
+    setExpandedComments(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(commentId)) {
+        newSet.delete(commentId);
+      } else {
+        newSet.add(commentId);
+      }
+      return newSet;
+    });
+  };
+
+  // Format file size
+  const formatFileSize = (bytes: number | undefined) => {
+    if (!bytes || bytes === 0) return '0 Bytes';
+    const k = 1024;
+    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+  };
+
+  // Get file icon based on file type
+  const getFileIcon = (fileType: string | undefined) => {
+    if (!fileType) return <File size={16} className="text-gray-500" />;
+    
+    const type = fileType.toLowerCase();
+    
+    if (type.startsWith('image/')) {
+      return <Image size={16} className="text-blue-500" />;
+    } else if (type.includes('pdf')) {
+      return <FileText size={16} className="text-red-500" />;
+    } else if (type.includes('word') || type.includes('doc') || type.includes('docx')) {
+      return <FileText size={16} className="text-blue-600" />;
+    } else if (type.includes('excel') || type.includes('xls') || type.includes('csv')) {
+      return <FileText size={16} className="text-green-600" />;
+    } else if (type.includes('zip') || type.includes('rar') || type.includes('tar') || type.includes('7z')) {
+      return <File size={16} className="text-orange-500" />;
+    } else if (type.includes('text/') || type.includes('txt')) {
+      return <FileText size={16} className="text-gray-600" />;
+    } else if (type.includes('json') || type.includes('xml')) {
+      return <FileText size={16} className="text-purple-500" />;
+    } else if (type.includes('video/')) {
+      return <File size={16} className="text-purple-600" />;
+    } else if (type.includes('audio/')) {
+      return <File size={16} className="text-yellow-600" />;
+    } else {
+      return <File size={16} className="text-gray-500" />;
+    }
+  };
+
+  // Get file type display name
+  const getFileTypeDisplay = (fileType: string | undefined) => {
+    if (!fileType) return 'File';
+    
+    const type = fileType.toLowerCase();
+    
+    if (type.startsWith('image/')) {
+      return 'Image';
+    } else if (type.includes('pdf')) {
+      return 'PDF';
+    } else if (type.includes('word') || type.includes('doc')) {
+      return 'Word';
+    } else if (type.includes('excel') || type.includes('xls')) {
+      return 'Excel';
+    } else if (type.includes('zip') || type.includes('rar')) {
+      return 'Archive';
+    } else if (type.includes('text/')) {
+      return 'Text';
+    } else if (type.includes('video/')) {
+      return 'Video';
+    } else if (type.includes('audio/')) {
+      return 'Audio';
+    } else if (type.includes('json')) {
+      return 'JSON';
+    } else if (type.includes('xml')) {
+      return 'XML';
+    } else {
+      return fileType.split('/')[1] || 'File';
+    }
+  };
+
+  // Check if file type is viewable in browser
+  const isViewableInBrowser = (fileType: string | undefined) => {
+    if (!fileType) return false;
+    
+    const type = fileType.toLowerCase();
+    return (
+      type.startsWith('image/') ||
+      type.includes('pdf') ||
+      type.includes('text/') ||
+      type.includes('json') ||
+      type.includes('xml') ||
+      type.includes('html')
+    );
+  };
 
   // Fetch tasks with all subtasks and assignee details
   const fetchTasks = async (epicId: string) => {
@@ -284,6 +807,19 @@ export default function TasksManagement({
       setTasks([]);
     }
   }, [selectedEpic, employees]);
+
+  // When viewing a task, fetch its comments and attachments
+  useEffect(() => {
+    if (viewTaskId && isViewMode) {
+      // First try to fetch attachments directly
+      fetchAttachmentsDirectly(viewTaskId);
+      // Also fetch comments separately
+      fetchTaskComments(viewTaskId);
+    } else {
+      setTaskComments([]);
+      setTaskAttachments([]);
+    }
+  }, [viewTaskId, isViewMode]);
 
   const handleTaskSubmit = async () => {
     if (!selectedProject || !selectedEpic || !taskFormData.summary.trim()) {
@@ -1441,11 +1977,11 @@ export default function TasksManagement({
           </div>
         )}
 
-        {/* View Task Modal - UPDATED WITH ALL INFO AND SCROLLABLE SUBTASKS */}
+        {/* View Task Modal - UPDATED WITH COMMENTS AND ATTACHMENTS */}
         {isViewMode && viewTask && (
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={() => setIsViewMode(false)}>
             <div 
-              className="bg-white rounded-3xl border-2 border-slate-200 shadow-2xl w-full max-w-6xl max-h-[70vh] mt-1 flex flex-col"
+              className="bg-white rounded-3xl border-2 border-slate-200 shadow-2xl w-full max-w-6xl max-h-[90vh] mt-1 flex flex-col"
               onClick={(e) => e.stopPropagation()}
             >
               {/* Modal Header */}
@@ -1455,6 +1991,8 @@ export default function TasksManagement({
                     onClick={() => {
                       setIsViewMode(false);
                       setViewTaskId(null);
+                      setTaskComments([]);
+                      setTaskAttachments([]);
                     }}
                     className="p-2 hover:bg-slate-100 rounded-xl transition-colors"
                     title="Close"
@@ -1664,243 +2202,289 @@ export default function TasksManagement({
                   </div>
                 </div>
 
-                {/* Right Column - Assignees, Reporters & Subtasks */}
+                {/* Right Column - Comments, Attachments & Activity */}
                 <div className="w-96 overflow-y-auto border-l border-slate-100">
-                  <div className="p-6 space-y-6">
-                    {/* Assignees with Full Information */}
-                    <div className="space-y-4">
-                      <h4 className="text-sm font-bold text-slate-700 flex items-center gap-2">
-                        <Users size={16} />
-                        Assignees ({getTaskAssignees(viewTask).length})
-                      </h4>
-                      {getTaskAssignees(viewTask).length > 0 ? (
-                        <div className="space-y-3">
-                          {getTaskAssignees(viewTask).map((assignee, index) => {
-                            const employee = getEmployeeById(assignee._id) || assignee;
-                            return (
-                              <div key={assignee._id || index} className="p-4 bg-white rounded-xl border border-slate-200">
-                                <div className="flex items-center gap-3 mb-3">
-                                  <div className="w-12 h-12 bg-blue-100 rounded-full flex items-center justify-center text-lg font-bold text-blue-600">
-                                    {employee.name.charAt(0)}
-                                  </div>
-                                  <div className="flex-1">
-                                    <div className="font-bold text-slate-800">{employee.name}</div>
-                                    <div className="text-xs text-slate-500">{employee.role || "Employee"}</div>
-                                  </div>
-                                </div>
-                                <div className="space-y-2 text-sm">
-                                  {employee.email && (
-                                    <div className="flex items-center gap-2">
-                                      <Mail size={14} className="text-slate-400" />
-                                      <span className="text-slate-600">{employee.email}</span>
-                                    </div>
-                                  )}
-                                  {employee.department && (
-                                    <div className="flex items-center gap-2">
-                                      <Briefcase size={14} className="text-slate-400" />
-                                      <span className="text-slate-600">{employee.department}</span>
-                                    </div>
-                                  )}
-                                </div>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      ) : (
-                        <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 text-center">
-                          <Users size={24} className="mx-auto text-slate-300 mb-2" />
-                          <p className="text-slate-500">No assignees</p>
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Reporters with Full Information */}
-                    <div className="space-y-4">
-                      <h4 className="text-sm font-bold text-slate-700 flex items-center gap-2">
-                        <User size={16} />
-                        Reporters ({getTaskReporters(viewTask).length})
-                      </h4>
-                      {getTaskReporters(viewTask).length > 0 ? (
-                        <div className="space-y-3">
-                          {getTaskReporters(viewTask).map((reporter, index) => {
-                            const employee = getEmployeeById(reporter._id) || reporter;
-                            return (
-                              <div key={reporter._id || index} className="p-4 bg-white rounded-xl border border-slate-200">
-                                <div className="flex items-center gap-3 mb-3">
-                                  <div className="w-12 h-12 bg-green-100 rounded-full flex items-center justify-center text-lg font-bold text-green-600">
-                                    {employee.name.charAt(0)}
-                                  </div>
-                                  <div className="flex-1">
-                                    <div className="font-bold text-slate-800">{employee.name}</div>
-                                    <div className="text-xs text-slate-500">{employee.role || "Employee"}</div>
-                                  </div>
-                                </div>
-                                <div className="space-y-2 text-sm">
-                                  {employee.email && (
-                                    <div className="flex items-center gap-2">
-                                      <Mail size={14} className="text-slate-400" />
-                                      <span className="text-slate-600">{employee.email}</span>
-                                    </div>
-                                  )}
-                                </div>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      ) : (
-                        <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 text-center">
-                          <User size={24} className="mx-auto text-slate-300 mb-2" />
-                          <p className="text-slate-500">No reporters</p>
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Subtasks Section - SCROLLABLE */}
+                  <div className="p-6 space-y-8">
+                    {/* Comments Section */}
                     <div className="space-y-4">
                       <div className="flex items-center justify-between">
                         <h4 className="text-sm font-bold text-slate-700 flex items-center gap-2">
-                          <ListTree size={16} />
-                          Subtasks ({viewTask.subtasks?.length || 0})
+                          <MessageSquare size={16} />
+                          Comments ({taskComments.length})
                         </h4>
-                        {viewTask.subtasks && viewTask.subtasks.length > 0 && (
-                          <span className="text-xs text-slate-500">
-                            {calculateSubtaskProgress(viewTask.subtasks).done} of {viewTask.subtasks.length} completed
-                          </span>
+                        {loadingComments && (
+                          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-[#3fa87d]"></div>
                         )}
                       </div>
 
-                      {viewTask.subtasks && viewTask.subtasks.length > 0 ? (
-                        <>
-                          {/* Overall Progress Bar */}
-                          <div className="p-4 bg-slate-50 rounded-xl border border-slate-200">
-                            <div className="flex items-center justify-between mb-3">
-                              <div className="text-sm font-bold text-slate-700">Overall Progress</div>
-                              <div className="text-lg font-bold text-slate-800">{calculateSubtaskProgress(viewTask.subtasks).overallProgress}%</div>
-                            </div>
-                            <div className="w-full bg-slate-200 rounded-full h-3 mb-2">
-                              <div 
-                                className="bg-[#3fa87d] h-3 rounded-full transition-all duration-300"
-                                style={{ width: `${calculateSubtaskProgress(viewTask.subtasks).overallProgress}%` }}
-                              />
-                            </div>
-                            <div className="flex justify-between text-xs text-slate-600">
-                              <div className="flex items-center gap-1">
-                                <div className="w-3 h-3 bg-green-500 rounded-full"></div>
-                                <span>Done: {calculateSubtaskProgress(viewTask.subtasks).done}</span>
-                              </div>
-                              <div className="flex items-center gap-1">
-                                <div className="w-3 h-3 bg-blue-500 rounded-full"></div>
-                                <span>In Progress: {calculateSubtaskProgress(viewTask.subtasks).inProgress}</span>
-                              </div>
-                              <div className="flex items-center gap-1">
-                                <div className="w-3 h-3 bg-yellow-500 rounded-full"></div>
-                                <span>Todo: {calculateSubtaskProgress(viewTask.subtasks).todo}</span>
-                              </div>
-                            </div>
-                          </div>
-
-                          {/* Scrollable Subtasks List */}
-                          <div className="border border-slate-200 rounded-xl overflow-hidden max-h-[400px]">
-                            <div className="h-full overflow-y-auto p-2">
-                              <div className="space-y-2">
-                                {viewTask.subtasks.map((subtask) => (
-                                  <div key={subtask._id} className="p-4 bg-white rounded-xl border border-slate-200 hover:border-[#3fa87d]/50 transition-colors">
-                                    <div className="flex items-start justify-between mb-3">
-                                      <div className="flex-1">
-                                        <div className="flex items-center gap-2 mb-2">
-                                          {subtask.status === "Done" ? (
-                                            <CheckSquare size={16} className="text-green-500" />
-                                          ) : (
-                                            <Square size={16} className="text-slate-400" />
-                                          )}
-                                          <div className="font-bold text-slate-800">{subtask.title}</div>
-                                        </div>
-                                        {subtask.description && (
-                                          <p className="text-sm text-slate-600 mb-2">{subtask.description}</p>
-                                        )}
-                                        <div className="flex items-center gap-3">
-                                          <div className="flex items-center gap-1">
-                                            <User size={12} className="text-slate-400" />
-                                            <span className="text-xs text-slate-600">{subtask.assigneeName || "Unassigned"}</span>
-                                          </div>
-                                          <div className={`px-2 py-1 rounded-lg text-[10px] font-black flex items-center gap-1 ${getSubtaskStatusColor(subtask.status)}`}>
-                                            {getSubtaskStatusIcon(subtask.status)}
-                                            <span>{subtask.status}</span>
-                                          </div>
-                                        </div>
-                                      </div>
-                                      <div className="text-right">
-                                        <div className="text-sm font-bold text-slate-800">{subtask.progressPercentage}%</div>
-                                        <div className="text-xs text-slate-500">Progress</div>
-                                      </div>
-                                    </div>
-                                    
-                                    {/* Individual Subtask Progress Bar */}
-                                    <div className="w-full bg-slate-200 rounded-full h-2 mb-2">
-                                      <div 
-                                        className={`h-2 rounded-full ${
-                                          subtask.status === 'Done' ? 'bg-green-500' :
-                                          subtask.status === 'In Progress' ? 'bg-blue-500' :
-                                          'bg-yellow-500'
-                                        }`}
-                                        style={{ width: `${subtask.progressPercentage}%` }}
-                                      />
-                                    </div>
-                                    
-                                    <div className="flex justify-between text-[10px] text-slate-500">
-                                      <span>Created: {formatDate(subtask.createdAt)}</span>
-                                      <span>Updated: {formatDate(subtask.updatedAt)}</span>
-                                    </div>
+                      {/* Add New Comment */}
+                      <div className="p-4 bg-slate-50 rounded-xl border border-slate-200">
+                        <textarea
+                          value={newComment}
+                          onChange={(e) => setNewComment(e.target.value)}
+                          placeholder="Add a comment..."
+                          className="w-full px-3 py-2 bg-white border-2 border-slate-200 rounded-lg text-sm font-bold outline-none focus:border-[#3fa87d] transition-all min-h-[80px] resize-none"
+                          rows={3}
+                        />
+                        
+                        {/* File Upload Area */}
+                        <div className="mt-3 space-y-2">
+                          <input
+                            type="file"
+                            multiple
+                            onChange={handleFileSelect}
+                            className="hidden"
+                            id="comment-attachments"
+                          />
+                          <label htmlFor="comment-attachments" className="flex items-center gap-2 text-xs text-slate-600 hover:text-[#3fa87d] cursor-pointer">
+                            <Paperclip size={14} />
+                            <span>Attach files</span>
+                          </label>
+                          
+                          {/* Selected Files Preview */}
+                          {selectedFiles.length > 0 && (
+                            <div className="space-y-2">
+                              {selectedFiles.map((file, index) => (
+                                <div key={index} className="flex items-center justify-between p-2 bg-white rounded-lg border border-slate-200">
+                                  <div className="flex items-center gap-2">
+                                    <File size={12} className="text-slate-400" />
+                                    <span className="text-xs text-slate-700 truncate max-w-[180px]">{file.name}</span>
+                                    <span className="text-xs text-slate-500">({formatFileSize(file.size)})</span>
                                   </div>
-                                ))}
-                              </div>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleRemoveFile(index)}
+                                    className="p-1 hover:bg-red-100 rounded text-red-500"
+                                  >
+                                    <X size={12} />
+                                  </button>
+                                </div>
+                              ))}
                             </div>
-                          </div>
-                        </>
-                      ) : (
-                        <div className="p-6 bg-slate-50 rounded-xl border border-slate-200 text-center">
-                          <ListTree size={24} className="mx-auto text-slate-300 mb-2" />
-                          <p className="text-slate-500">No subtasks defined</p>
-                          <p className="text-xs text-slate-400 mt-1">Add subtasks to break down the work</p>
+                          )}
                         </div>
-                      )}
-                    </div>
 
-                    {/* Comments Section */}
-                    <div className="space-y-4">
-                      <h4 className="text-sm font-bold text-slate-700 flex items-center gap-2">
-                        <MessageSquare size={16} />
-                        Comments ({viewTask.comments?.length || 0})
-                      </h4>
-                      
-                      {viewTask.comments && viewTask.comments.length > 0 ? (
-                        <div className="space-y-3 max-h-48 overflow-y-auto pr-2">
-                          {viewTask.comments.map((comment) => {
-                            const commentUser = employees.find(e => e._id === comment.userId);
+                        {/* Submit Button */}
+                        <button
+                          onClick={() => handleSubmitComment(viewTask._id)}
+                          disabled={uploadingComment || (!newComment.trim() && selectedFiles.length === 0)}
+                          className="w-full mt-3 py-2 bg-slate-900 text-white text-xs font-bold rounded-lg hover:bg-[#3fa87d] transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                        >
+                          {uploadingComment && (
+                            <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-white"></div>
+                          )}
+                          {uploadingComment ? "Posting..." : "Post Comment"}
+                        </button>
+                      </div>
+
+                      {/* Comments List */}
+                      {loadingComments ? (
+                        <div className="flex justify-center py-4">
+                          <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-[#3fa87d]"></div>
+                        </div>
+                      ) : taskComments.length === 0 ? (
+                        <div className="p-6 bg-slate-50 rounded-xl border border-slate-200 text-center">
+                          <MessageSquare size={24} className="mx-auto text-slate-300 mb-2" />
+                          <p className="text-slate-500">No comments yet</p>
+                          <p className="text-xs text-slate-400 mt-1">Be the first to comment</p>
+                        </div>
+                      ) : (
+                        <div className="space-y-3 max-h-[400px] overflow-y-auto pr-2">
+                          {taskComments.map((comment) => {
+                            const isExpanded = expandedComments.has(comment._id);
+                            const commentEmployee = employees.find(e => e._id === comment.userId);
+                            const commentContent = comment.content || comment.text || '';
+                            const contentLength = commentContent.length;
+                            
                             return (
                               <div key={comment._id} className="p-4 bg-white rounded-xl border border-slate-200">
-                                <div className="flex items-center justify-between mb-3">
+                                {/* Comment Header */}
+                                <div className="flex items-start justify-between mb-3">
                                   <div className="flex items-center gap-3">
-                                    <div className="w-8 h-8 bg-slate-300 rounded-full flex items-center justify-center text-sm font-bold">
-                                      {commentUser?.name.charAt(0) || "U"}
+                                    <div className="w-8 h-8 bg-blue-100 rounded-full flex items-center justify-center text-sm font-bold text-blue-600">
+                                      {commentEmployee?.name?.charAt(0) || comment.userName?.charAt(0) || "U"}
                                     </div>
                                     <div>
-                                      <div className="font-bold">{comment.userName}</div>
+                                      <div className="font-bold text-slate-800">{comment.userName || 'Unknown'}</div>
                                       <div className="text-xs text-slate-500">
+                                        {comment.userRole && `${comment.userRole} • `}
                                         {formatDateTime(comment.createdAt)}
                                       </div>
                                     </div>
                                   </div>
+                                  <button
+                                    onClick={() => handleDeleteComment(viewTask._id, comment._id)}
+                                    className="p-1 hover:bg-red-100 rounded text-red-500"
+                                    title="Delete comment"
+                                  >
+                                    <Trash2 size={14} />
+                                  </button>
                                 </div>
-                                <p className="text-slate-700">{comment.content}</p>
+                                
+                                {/* Comment Content */}
+                                <div className="mb-3">
+                                  <p className={`text-slate-700 ${!isExpanded && contentLength > 200 ? 'line-clamp-3' : ''}`}>
+                                    {commentContent}
+                                  </p>
+                                  {contentLength > 200 && (
+                                    <button
+                                      onClick={() => toggleCommentExpansion(comment._id)}
+                                      className="text-xs text-[#3fa87d] font-bold mt-1 hover:underline"
+                                    >
+                                      {isExpanded ? "Show less" : "Read more"}
+                                    </button>
+                                  )}
+                                </div>
+                                
+                                {/* Comment Attachments */}
+                                {comment.attachments && comment.attachments.length > 0 && (
+                                  <div className="space-y-2 mt-3">
+                                    <div className="text-xs text-slate-500 flex items-center gap-1">
+                                      <Paperclip size={12} />
+                                      Attachments ({comment.attachments.length})
+                                    </div>
+                                    <div className="space-y-1">
+                                      {comment.attachments.map((attachment) => (
+                                        <div key={attachment._id || attachment.id} className="flex items-center justify-between p-2 bg-slate-50 rounded-lg border border-slate-200">
+                                          <div className="flex items-center gap-2">
+                                            {getFileIcon(attachment.fileType)}
+                                            <div>
+                                              <div className="text-xs text-slate-700 truncate max-w-[180px]">{attachment.fileName}</div>
+                                              <div className="text-[10px] text-slate-500">
+                                                {getFileTypeDisplay(attachment.fileType)} • {formatFileSize(attachment.size || attachment.fileSize)}
+                                              </div>
+                                            </div>
+                                          </div>
+                                          <div className="flex items-center gap-1">
+                                            {isViewableInBrowser(attachment.fileType) ? (
+                                              <button
+                                                onClick={() => handleViewAttachment(attachment)}
+                                                className="p-1 hover:bg-blue-100 rounded text-blue-500"
+                                                title="View file"
+                                              >
+                                                <Eye size={12} />
+                                              </button>
+                                            ) : (
+                                              <button
+                                                onClick={() => window.open(attachment.url, '_blank', 'noopener,noreferrer')}
+                                                className="p-1 hover:bg-blue-100 rounded text-blue-500"
+                                                title="Open in new tab"
+                                              >
+                                                <ExternalLink size={12} />
+                                              </button>
+                                            )}
+                                            <button
+                                              onClick={() => handleDownloadAttachment(attachment)}
+                                              className="p-1 hover:bg-green-100 rounded text-green-500"
+                                              title="Download"
+                                            >
+                                              <Download size={12} />
+                                            </button>
+                                            <button
+                                              onClick={() => handleDeleteAttachment(viewTask._id, attachment._id || attachment.id || '', comment._id)}
+                                              className="p-1 hover:bg-red-100 rounded text-red-500"
+                                              title="Delete attachment"
+                                            >
+                                              <Trash2 size={12} />
+                                            </button>
+                                          </div>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
                               </div>
                             );
                           })}
                         </div>
+                      )}
+                    </div>
+
+                    {/* Attachments Section */}
+                    <div className="space-y-4">
+                      <div className="flex items-center justify-between">
+                        <h4 className="text-sm font-bold text-slate-700 flex items-center gap-2">
+                          <Paperclip size={16} />
+                          Attachments ({taskAttachments.length})
+                        </h4>
+                        {loadingAttachments && (
+                          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-[#3fa87d]"></div>
+                        )}
+                      </div>
+
+                      {loadingAttachments ? (
+                        <div className="flex justify-center py-4">
+                          <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-[#3fa87d]"></div>
+                        </div>
+                      ) : taskAttachments.length === 0 ? (
+                        <div className="p-6 bg-slate-50 rounded-xl border border-slate-200 text-center">
+                          <Paperclip size={24} className="mx-auto text-slate-300 mb-2" />
+                          <p className="text-slate-500">No attachments</p>
+                          <p className="text-xs text-slate-400 mt-1">Upload files in comments</p>
+                        </div>
                       ) : (
-                        <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 text-center">
-                          <MessageSquare size={24} className="mx-auto text-slate-300 mb-2" />
-                          <p className="text-slate-500">No comments yet</p>
+                        <div className="space-y-2 max-h-[300px] overflow-y-auto pr-2">
+                          {taskAttachments.map((attachment) => {
+                            const uploader = employees.find(e => e._id === attachment.uploadedBy);
+                            return (
+                              <div key={attachment._id || attachment.id} className="p-3 bg-white rounded-xl border border-slate-200 hover:border-[#3fa87d]/50 transition-colors">
+                                <div className="flex items-start justify-between">
+                                  <div className="flex items-center gap-3 flex-1">
+                                    <div className="p-2 bg-slate-100 rounded-lg">
+                                      {getFileIcon(attachment.fileType)}
+                                    </div>
+                                    <div className="flex-1 min-w-0">
+                                      <div className="text-sm font-bold text-slate-800 truncate">{attachment.fileName}</div>
+                                      <div className="flex items-center gap-2 text-xs text-slate-500">
+                                        <span>{getFileTypeDisplay(attachment.fileType)}</span>
+                                        <span>•</span>
+                                        <span>{formatFileSize(attachment.size || attachment.fileSize)}</span>
+                                      </div>
+                                      <div className="text-[10px] text-slate-400 mt-1 flex items-center gap-1">
+                                        <User size={10} />
+                                        Uploaded by {uploader?.name || attachment.uploadedByName || 'Unknown'}
+                                        <span className="mx-1">•</span>
+                                        {formatDateTime(attachment.uploadedAt || attachment.createdAt || '')}
+                                      </div>
+                                    </div>
+                                  </div>
+                                  <div className="flex items-center gap-1">
+                                    {isViewableInBrowser(attachment.fileType) ? (
+                                      <button
+                                        onClick={() => handleViewAttachment(attachment)}
+                                        className="p-1.5 hover:bg-blue-100 rounded-lg text-blue-500"
+                                        title="View file"
+                                      >
+                                        <Eye size={14} />
+                                      </button>
+                                    ) : (
+                                      <button
+                                        onClick={() => window.open(attachment.url, '_blank', 'noopener,noreferrer')}
+                                        className="p-1.5 hover:bg-blue-100 rounded-lg text-blue-500"
+                                        title="Open in new tab"
+                                      >
+                                        <ExternalLink size={14} />
+                                      </button>
+                                    )}
+                                    <button
+                                      onClick={() => handleDownloadAttachment(attachment)}
+                                      className="p-1.5 hover:bg-green-100 rounded-lg text-green-500"
+                                      title="Download"
+                                    >
+                                      <Download size={14} />
+                                    </button>
+                                    <button
+                                      onClick={() => handleDeleteAttachment(viewTask._id, attachment._id || attachment.id || '', attachment.commentId)}
+                                      className="p-1.5 hover:bg-red-100 rounded-lg text-red-500"
+                                      title="Delete attachment"
+                                    >
+                                      <Trash2 size={14} />
+                                    </button>
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })}
                         </div>
                       )}
                     </div>
@@ -1918,6 +2502,8 @@ export default function TasksManagement({
                     onClick={() => {
                       setIsViewMode(false);
                       setViewTaskId(null);
+                      setTaskComments([]);
+                      setTaskAttachments([]);
                     }}
                     className="px-6 py-2 bg-slate-800 text-white text-sm font-bold rounded-xl hover:bg-slate-900 transition-colors"
                   >
@@ -1929,12 +2515,151 @@ export default function TasksManagement({
           </div>
         )}
 
+        {/* Attachment Viewer Modal */}
+        {viewingAttachment && (
+          <div className="fixed inset-0 bg-black/90 flex items-center justify-center z-[100] p-4" onClick={closeAttachmentViewer}>
+            <div 
+              className="bg-white rounded-3xl border-2 border-slate-200 shadow-2xl w-full max-w-5xl max-h-[90vh] flex flex-col"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {/* Viewer Header */}
+              <div className="p-6 border-b border-slate-100 flex items-center justify-between sticky top-0 bg-white z-10 rounded-t-3xl">
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={closeAttachmentViewer}
+                    className="p-2 hover:bg-slate-100 rounded-xl transition-colors"
+                    title="Close"
+                  >
+                    <X size={18} className="text-slate-500" />
+                  </button>
+                  <div>
+                    <h2 className="text-lg font-bold text-slate-800 truncate max-w-md">
+                      {viewingAttachment.fileName}
+                    </h2>
+                    <div className="text-xs text-slate-500 flex items-center gap-2">
+                      <span>{getFileTypeDisplay(viewingAttachment.fileType)}</span>
+                      <span>•</span>
+                      <span>{formatFileSize(viewingAttachment.size || viewingAttachment.fileSize)}</span>
+                    </div>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => handleDownloadAttachment(viewingAttachment)}
+                    className="px-4 py-2 bg-blue-600 text-white text-sm font-bold rounded-xl hover:bg-blue-700 transition-colors flex items-center gap-2"
+                    title="Download"
+                  >
+                    <Download size={14} /> Download
+                  </button>
+                </div>
+              </div>
+
+              {/* Viewer Content */}
+              <div className="flex-1 overflow-hidden p-6">
+                {viewingAttachment.fileType?.startsWith('image/') ? (
+                  <div className="flex items-center justify-center h-full">
+                    <img 
+                      src={viewerUrl} 
+                      alt={viewingAttachment.fileName}
+                      className="max-w-full max-h-full object-contain rounded-lg"
+                      onError={(e) => {
+                        e.currentTarget.src = '/api/placeholder/800/600';
+                        e.currentTarget.alt = 'Image failed to load';
+                      }}
+                    />
+                  </div>
+                ) : viewingAttachment.fileType?.includes('pdf') ? (
+                  <div className="h-full flex flex-col">
+                    <div className="mb-4 p-3 bg-slate-100 rounded-lg flex items-center justify-between">
+                      <div className="text-sm text-slate-700">
+                        PDF Document - {viewingAttachment.fileName}
+                      </div>
+                      <button
+                        onClick={() => window.open(viewerUrl, '_blank', 'noopener,noreferrer')}
+                        className="px-3 py-1.5 bg-blue-600 text-white text-xs font-bold rounded-lg hover:bg-blue-700 transition-colors flex items-center gap-1"
+                      >
+                        <ExternalLink size={12} /> Open in New Tab
+                      </button>
+                    </div>
+                    <iframe 
+                      src={viewerUrl}
+                      title={viewingAttachment.fileName}
+                      className="flex-1 w-full border border-slate-300 rounded-lg"
+                      onError={(e) => {
+                        const iframe = e.currentTarget;
+                        iframe.srcdoc = `
+                          <html>
+                            <head><title>PDF Viewer</title></head>
+                            <body style="margin:0;padding:20px;background:#f5f5f5;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;">
+                              <div style="text-align:center;">
+                                <h3 style="color:#666;margin-bottom:10px;">PDF cannot be displayed inline</h3>
+                                <p style="color:#999;margin-bottom:20px;">Please download or open in a new tab</p>
+                                <a href="${viewerUrl}" download="${viewingAttachment.fileName}" style="padding:10px 20px;background:#3b82f6;color:white;border-radius:6px;text-decoration:none;">Download PDF</a>
+                              </div>
+                            </body>
+                          </html>
+                        `;
+                      }}
+                    />
+                  </div>
+                ) : (
+                  <div className="h-full flex flex-col items-center justify-center p-8">
+                    <div className="text-center max-w-md">
+                      <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                        {getFileIcon(viewingAttachment.fileType)}
+                      </div>
+                      <h3 className="text-lg font-bold text-slate-800 mb-2">
+                        {viewingAttachment.fileName}
+                      </h3>
+                      <p className="text-slate-600 mb-4">
+                        This file type cannot be previewed directly. You can download it or open it in a new tab.
+                      </p>
+                      <div className="flex items-center justify-center gap-3">
+                        <button
+                          onClick={() => window.open(viewerUrl, '_blank', 'noopener,noreferrer')}
+                          className="px-4 py-2 bg-blue-600 text-white text-sm font-bold rounded-xl hover:bg-blue-700 transition-colors flex items-center gap-2"
+                        >
+                          <ExternalLink size={14} /> Open in New Tab
+                        </button>
+                        <button
+                          onClick={() => handleDownloadAttachment(viewingAttachment)}
+                          className="px-4 py-2 bg-green-600 text-white text-sm font-bold rounded-xl hover:bg-green-700 transition-colors flex items-center gap-2"
+                        >
+                          <Download size={14} /> Download
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Viewer Footer */}
+              <div className="p-4 border-t border-slate-100 flex items-center justify-between text-sm text-slate-600">
+                <div>
+                  Uploaded by: {viewingAttachment.uploadedByName || 'Unknown'} • 
+                  Date: {formatDateTime(viewingAttachment.uploadedAt || viewingAttachment.createdAt || '')}
+                </div>
+                <button
+                  onClick={closeAttachmentViewer}
+                  className="px-4 py-2 bg-slate-800 text-white text-sm font-bold rounded-xl hover:bg-slate-900 transition-colors"
+                >
+                  Close Viewer
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Message Toast */}
         {message && (
           <div className={`fixed bottom-4 right-4 px-4 py-2 rounded-xl text-sm font-bold animate-fade-in z-50 ${
             message.includes("✅") 
               ? "bg-green-100 text-green-800 border border-green-200" 
-              : "bg-red-100 text-red-800 border border-red-200"
+              : message.includes("❌")
+              ? "bg-red-100 text-red-800 border border-red-200"
+              : message.includes("⬇️")
+              ? "bg-blue-100 text-blue-800 border border-blue-200"
+              : "bg-yellow-100 text-yellow-800 border border-yellow-200"
           }`}>
             {message}
           </div>
