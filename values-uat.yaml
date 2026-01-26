@@ -1,0 +1,73 @@
+# Default values for lemponpay-deployment.
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+name: lp-unity
+
+namespace: lp-unity
+
+replicaCount: 1
+
+image:
+  repository: "" #values will pick from jenkins build
+  # Overrides the image tag whose default is the chart appVersion.
+  tag: "" #values will pick from jenkins build
+
+
+service:
+  targetPort: 5000
+
+#### Resource allocation To Pod/application/container
+resources: 
+  limits:
+    cpu: 1000m
+    memory: 1000Mi
+  requests:
+    cpu: 700m
+    memory: 700Mi
+
+##### HPA ############
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 1
+  targetCPUUtilizationPercentage: 80
+  targetMemoryUtilizationPercentage: 80
+
+
+######## Application health Check
+# readinessProbe:
+#   httpGet:
+#     path: /api/id360/v1/trans/health-check
+#     port: 5000
+#     scheme: HTTP
+#   initialDelaySeconds: 20
+#   periodSeconds: 10
+  
+# livenessProbe:
+#   httpGet:
+#     path: /api/id360/v1/trans/health-check
+#     port: 5000
+#     scheme: HTTP
+#   initialDelaySeconds: 20
+#   periodSeconds: 10
+
+readinessProbe:
+  httpGet:
+    path: /api/health
+    port: 5000
+  initialDelaySeconds: 30
+  periodSeconds: 10
+
+livenessProbe:
+  httpGet:
+    path: /api/health
+    port: 5000
+  initialDelaySeconds: 60
+  periodSeconds: 20
+
+
+apisix:
+  hosts:
+    - unity-uat.lemonpay.in # here we need add IP for testing purpose only 
+  paths:
+    - "/*"

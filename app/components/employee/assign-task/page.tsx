@@ -18,7 +18,9 @@ import {
   Play,
   MessageSquare,
   Paperclip,
-  Upload
+  Upload,
+  Lock,
+  CheckCircle2
 } from "lucide-react";
 import { toast, ToastContainer } from "react-toastify";
 import "react-toastify/dist/ReactToastify.css";
@@ -32,31 +34,61 @@ import { getAggregatedTaskData } from "./utils/aggregation";
 
 type Role = "Admin" | "Manager" | "TeamLead" | "Employee";
 
-// All task statuses matching the Mongoose model
-const allTaskStatuses = [
-  "Icebox",
-  "Backlog",
-  "Prioritized",
-  "Todo",
-  "Ready for Dev",
-  "In Progress",
-  "Dev Review",
-  "Code Review",
-  "QA Ready",
-  "QA In Progress",
-  "QA Review",
-  "UAT",
-  "Client Review",
-  "Ready for Release",
-  "Staging",
-  "Production",
-  "Live",
-  "Done",
-  "Closed",
-  "Blocked",
-  "On Hold",
-  "Rejected"
-];
+// Calculate task progress from subtasks
+const calculateTaskProgressFromSubtasks = (subtasks: any[] | undefined | null): number => {
+  if (!subtasks || subtasks.length === 0) return 0;
+  
+  const calculateSubtaskProgress = (subtask: any): number => {
+    if (subtask.progress !== undefined) {
+      return Number(subtask.progress) || 0;
+    }
+    
+    switch (subtask.status?.toLowerCase()) {
+      case "completed":
+      case "done":
+        return 100;
+      case "in progress":
+        return 50;
+      case "paused":
+        return 25;
+      case "to do":
+      case "todo":
+      default:
+        return 0;
+    }
+  };
+  
+  const flattenSubtasks = (subtasksList: any[]): any[] => {
+    let flatList: any[] = [];
+    subtasksList.forEach(sub => {
+      flatList.push(sub);
+      if (sub.subtasks && sub.subtasks.length > 0) {
+        flatList = [...flatList, ...flattenSubtasks(sub.subtasks)];
+      }
+    });
+    return flatList;
+  };
+  
+  const allSubtasks = flattenSubtasks(subtasks);
+  if (allSubtasks.length === 0) return 0;
+  
+  const totalProgress = allSubtasks.reduce((sum, sub) => {
+    return sum + calculateSubtaskProgress(sub);
+  }, 0);
+  
+  return Math.round(totalProgress / allSubtasks.length);
+};
+
+// Check if user can edit task based on progress
+const canEditTaskBasedOnProgress = (taskProgress: number, currentUserRole: string): boolean => {
+  if (currentUserRole === "Admin" || currentUserRole === "Manager") return true;
+  
+  if (currentUserRole === "Employee") {
+    return taskProgress < 100;
+  }
+  
+  return false;
+};
 
 const TasksPage: React.FC = () => {
   // --- Data States ---
@@ -139,7 +171,6 @@ const TasksPage: React.FC = () => {
       if (attachments && attachments.length > 0) {
         console.log(`Uploading ${attachments.length} attachments`);
         
-        // For file uploads, use FormData
         const formData = new FormData();
         formData.append("text", commentText);
         
@@ -147,7 +178,6 @@ const TasksPage: React.FC = () => {
           formData.append(`attachments`, file);
         });
         
-        // Add user info to form data
         formData.append("userId", currentUserId);
         formData.append("userName", currentUserName);
         formData.append("userRole", currentUserRole);
@@ -169,10 +199,8 @@ const TasksPage: React.FC = () => {
           if (data.success && data.comment) {
             toast.success("Comment added with attachments");
             
-            // Update local comments state
             setComments(prev => [...prev, data.comment]);
             
-            // Update the task's comment count in the tasks list
             setTasks(prevTasks => 
               prevTasks.map(task => 
                 task._id === taskId 
@@ -193,7 +221,6 @@ const TasksPage: React.FC = () => {
           toast.error(errorData.error || "Failed to add comment with attachments");
         }
       } else {
-        // For text-only comments
         console.log(`Auth headers:`, getAuthHeaders());
         
         const res = await fetch(getApiUrl(`/api/tasks/${taskId}/comments`), {
@@ -211,10 +238,8 @@ const TasksPage: React.FC = () => {
           if (data.success && data.comment) {
             toast.success("Comment added");
             
-            // Update local comments state
             setComments(prev => [...prev, data.comment]);
             
-            // Update the task's comment count in the tasks list
             setTasks(prevTasks => 
               prevTasks.map(task => 
                 task._id === taskId 
@@ -248,7 +273,6 @@ const TasksPage: React.FC = () => {
       console.log(`Updating comment ${commentId} for task ${taskId}:`, newText);
       
       if (attachments && attachments.length > 0) {
-        // For file uploads with updates, use FormData
         const formData = new FormData();
         formData.append("commentId", commentId);
         formData.append("text", newText);
@@ -261,7 +285,6 @@ const TasksPage: React.FC = () => {
           formData.append(`newAttachments`, file);
         });
         
-        // Add user info to form data
         formData.append("userId", currentUserId);
         formData.append("userName", currentUserName);
         formData.append("userRole", currentUserRole);
@@ -283,7 +306,6 @@ const TasksPage: React.FC = () => {
           if (data.success && data.comment) {
             toast.success("Comment updated");
             
-            // Update local comments state
             setComments(prev => prev.map(comment => 
               comment._id === commentId || comment.id === commentId
                 ? { ...comment, ...data.comment, editedAt: new Date().toISOString() }
@@ -298,7 +320,6 @@ const TasksPage: React.FC = () => {
           toast.error(errorData.error || "Failed to update comment");
         }
       } else {
-        // For text-only updates
         console.log(`Auth headers:`, getAuthHeaders());
         
         const res = await fetch(getApiUrl(`/api/tasks/${taskId}/comments`), {
@@ -318,7 +339,6 @@ const TasksPage: React.FC = () => {
           if (data.success && data.comment) {
             toast.success("Comment updated");
             
-            // Update local comments state
             setComments(prev => prev.map(comment => 
               comment._id === commentId || comment.id === commentId
                 ? { ...comment, ...data.comment, editedAt: new Date().toISOString() }
@@ -358,12 +378,10 @@ const TasksPage: React.FC = () => {
         if (data.success) {
           toast.success("Comment deleted");
           
-          // Update local comments state
           setComments(prev => prev.filter(comment => 
             comment._id !== commentId && comment.id !== commentId
           ));
           
-          // Update the task's comment count in the tasks list
           setTasks(prevTasks => 
             prevTasks.map(task => 
               task._id === taskId 
@@ -411,7 +429,6 @@ const TasksPage: React.FC = () => {
         if (data.success) {
           toast.success("Attachment deleted");
           
-          // Update local comments state
           setComments(prev => prev.map(comment => {
             if (comment._id === commentId || comment.id === commentId) {
               return {
@@ -453,7 +470,6 @@ const TasksPage: React.FC = () => {
       if (res.ok) {
         let taskData: Task[] = [];
         
-        // Handle different response formats
         if (Array.isArray(data)) {
           taskData = data;
         } else if (data && Array.isArray(data.tasks)) {
@@ -468,9 +484,7 @@ const TasksPage: React.FC = () => {
         
         console.log(`Parsed ${taskData.length} tasks from API`);
         
-        // Process tasks to ensure proper task name display and subtasks
         taskData = taskData.map(task => {
-          // Normalize task status
           const normalizedStatus = (() => {
             const status = task.status || 'Backlog';
             const statusMap: Record<string, string> = {
@@ -485,7 +499,6 @@ const TasksPage: React.FC = () => {
             return statusMap[status] || status;
           })();
           
-          // Ensure subtasks is always an array and has proper structure
           let taskSubtasks: Subtask[] = [];
           if (task.subtasks && Array.isArray(task.subtasks)) {
             taskSubtasks = task.subtasks.map(sub => ({
@@ -501,7 +514,6 @@ const TasksPage: React.FC = () => {
             }));
           }
           
-          // Ensure comments have attachments array
           let taskComments: Comment[] = [];
           if (task.comments && Array.isArray(task.comments)) {
             taskComments = task.comments.map(comment => ({
@@ -510,11 +522,15 @@ const TasksPage: React.FC = () => {
             }));
           }
           
+          // Calculate progress from subtasks
+          const calculatedProgress = calculateTaskProgressFromSubtasks(taskSubtasks);
+          
           return {
             ...task,
             status: normalizedStatus,
             subtasks: taskSubtasks,
             comments: taskComments,
+            completion: calculatedProgress, // Override with calculated progress
             taskDisplayName: task.summary || task.title || task.name || `Task ${task.taskId || task._id?.substring(0, 8)}`,
             name: task.summary || task.title || task.name || `Task ${task.taskId || task._id?.substring(0, 8)}`,
             commentCount: task.commentCount || taskComments.length || 0,
@@ -559,7 +575,6 @@ const TasksPage: React.FC = () => {
     }
   };
 
-  // --- Recursive Subtask Management ---
   const getNewSubtask = (prefix: string, pathStr: string): Subtask => ({
     id: `${prefix}-SUB-${pathStr}-${Math.floor(Math.random() * 1000)}`,
     title: "",
@@ -632,7 +647,6 @@ const TasksPage: React.FC = () => {
     // Ensure subtasks are properly formatted
     let taskSubtasks = task.subtasks || [];
     if (taskSubtasks && taskSubtasks.length > 0) {
-      // Ensure each subtask has required fields
       taskSubtasks = taskSubtasks.map(sub => ({
         ...sub,
         id: sub.id || `sub-${Math.random().toString(36).substr(2, 9)}`,
@@ -646,9 +660,12 @@ const TasksPage: React.FC = () => {
       }));
     }
     
-    // All users should see ALL subtasks, regardless of assignment
+    // Calculate progress from subtasks
+    const calculatedProgress = calculateTaskProgressFromSubtasks(taskSubtasks);
+    
     const processedTask = {
       ...aggregated,
+      completion: calculatedProgress, // Use calculated progress
       name: aggregated.summary || aggregated.title || aggregated.name || `Task ${aggregated.taskId || aggregated._id?.substring(0, 8)}`,
       taskDisplayName: aggregated.summary || aggregated.title || aggregated.name || `Task ${aggregated.taskId || aggregated._id?.substring(0, 8)}`,
       subtasks: taskSubtasks
@@ -681,6 +698,15 @@ const TasksPage: React.FC = () => {
         return;
       }
 
+      // Calculate task progress
+      const taskProgress = calculateTaskProgressFromSubtasks(task.subtasks);
+      
+      // Check if task is 100% complete
+      if (taskProgress >= 100) {
+        toast.error("Cannot move task: Task is 100% complete and locked");
+        return;
+      }
+
       // Check permission for employees
       if (currentUserRole === "Employee") {
         const isAssigned = task.assigneeNames?.some(
@@ -693,7 +719,6 @@ const TasksPage: React.FC = () => {
         }
       }
 
-      // Normalize the status for API
       const normalizeStatus = (status: string): string => {
         const statusMap: Record<string, string> = {
           'To Do': 'Todo',
@@ -745,6 +770,15 @@ const TasksPage: React.FC = () => {
       return;
     }
 
+    // Calculate task progress
+    const taskProgress = calculateTaskProgressFromSubtasks(targetTask.subtasks);
+    
+    // Check if task is 100% complete
+    if (taskProgress >= 100) {
+      toast.error("Cannot update subtask: Task is 100% complete and locked");
+      return;
+    }
+
     // Check permission for employees
     if (currentUserRole === "Employee") {
       const isAssigned = targetTask.assigneeNames?.some(
@@ -756,7 +790,6 @@ const TasksPage: React.FC = () => {
         return;
       }
 
-      // Find the specific subtask
       const findSubtask = (subtasks: Subtask[]): Subtask | null => {
         for (const sub of subtasks) {
           if (sub.id === subtaskId) return sub;
@@ -774,7 +807,6 @@ const TasksPage: React.FC = () => {
         return;
       }
 
-      // Check if subtask is assigned to current employee
       if (subtask.assigneeName?.toLowerCase() !== currentUserName.toLowerCase() && subtask.assigneeName) {
         toast.error("You are not assigned to this subtask");
         return;
@@ -816,7 +848,6 @@ const TasksPage: React.FC = () => {
     }
   }, [tasks, currentUserRole, currentUserName, currentUserId, fetchTasks]);
 
-  // Handle starting a sprint (move from Backlog/Icebox to Todo)
   const handleStartSprint = useCallback(async (taskId: string) => {
     try {
       const task = tasks.find(t => t._id === taskId);
@@ -825,13 +856,20 @@ const TasksPage: React.FC = () => {
         return;
       }
 
-      // Check if task is in Icebox or Backlog
+      // Calculate task progress
+      const taskProgress = calculateTaskProgressFromSubtasks(task.subtasks);
+      
+      // Check if task is 100% complete
+      if (taskProgress >= 100) {
+        toast.error("Cannot start sprint: Task is 100% complete and locked");
+        return;
+      }
+
       if (task.status !== "Icebox" && task.status !== "Backlog") {
         toast.error("Only tasks in Icebox or Backlog can be started");
         return;
       }
 
-      // Check permission
       if (currentUserRole === "Employee") {
         const isAssigned = task.assigneeNames?.some(
           name => name.toLowerCase() === currentUserName.toLowerCase()
@@ -847,7 +885,7 @@ const TasksPage: React.FC = () => {
         method: "PUT",
         headers: getAuthHeaders(),
         body: JSON.stringify({ 
-          status: "Todo" // Move to Todo when starting sprint
+          status: "Todo"
         }),
       });
       
@@ -865,13 +903,20 @@ const TasksPage: React.FC = () => {
     }
   }, [tasks, currentUserRole, currentUserName, currentUserId, fetchTasks]);
 
-  // Fixed handleUpdate function
   const handleUpdate = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedTaskForModal?._id) return;
     
     try {
-      // Check if user is authorized to edit this task
+      // Calculate current task progress
+      const currentTaskProgress = calculateTaskProgressFromSubtasks(subtasks);
+      
+      // Check if task is 100% complete
+      if (currentTaskProgress >= 100 && currentUserRole === "Employee") {
+        toast.error("Cannot update task: Task is 100% complete and locked");
+        return;
+      }
+      
       if (currentUserRole === "Employee") {
         const isAssigned = selectedTaskForModal.assigneeNames?.some(
           name => name.toLowerCase() === currentUserName.toLowerCase()
@@ -886,10 +931,8 @@ const TasksPage: React.FC = () => {
       console.log('Current subtasks state:', subtasks);
       console.log('Current draftTask:', draftTask);
       
-      // Prepare the request body
       const requestBody: any = {};
       
-      // Normalize status if it's being updated
       if (draftTask.status) {
         const normalizeStatus = (status: string): string => {
           const statusMap: Record<string, string> = {
@@ -916,8 +959,11 @@ const TasksPage: React.FC = () => {
         requestBody.subtasks = [];
       }
       
-      // Include fields from draftTask
-      const fieldsToInclude = ['completion', 'remarks', 'summary', 'assigneeNames', 'dueDate', 'description'];
+      // Calculate completion from subtasks
+      const calculatedCompletion = calculateTaskProgressFromSubtasks(subtasks);
+      requestBody.completion = calculatedCompletion;
+      
+      const fieldsToInclude = ['remarks', 'summary', 'assigneeNames', 'dueDate', 'description'];
       
       fieldsToInclude.forEach(field => {
         if (draftTask[field as keyof Task] !== undefined) {
@@ -925,10 +971,9 @@ const TasksPage: React.FC = () => {
         }
       });
       
-      // For non-employees, include all fields except system fields
       if (currentUserRole !== "Employee") {
         Object.keys(draftTask).forEach(key => {
-          if (draftTask[key as keyof Task] !== undefined && !['_id', '__v', 'createdAt', 'updatedAt', 'createdBy', 'taskDisplayName'].includes(key)) {
+          if (draftTask[key as keyof Task] !== undefined && !['_id', '__v', 'createdAt', 'updatedAt', 'createdBy', 'taskDisplayName', 'completion'].includes(key)) {
             requestBody[key] = draftTask[key as keyof Task];
           }
         });
@@ -937,6 +982,7 @@ const TasksPage: React.FC = () => {
       console.log("Sending update request for task:", selectedTaskForModal._id);
       console.log("Request body keys:", Object.keys(requestBody));
       console.log("Subtasks being sent:", requestBody.subtasks?.length || 0);
+      console.log("Calculated completion:", calculatedCompletion);
       
       const res = await fetch(getApiUrl(`/api/tasks/${selectedTaskForModal._id}`), {
         method: "PUT",
@@ -1001,7 +1047,6 @@ const TasksPage: React.FC = () => {
     }
   };
 
-  // Handle adding a comment with attachments
   const handleAddComment = useCallback(async (taskId: string, commentText: string, attachments?: File[]) => {
     if (!commentText.trim() && (!attachments || attachments.length === 0)) {
       toast.error("Comment text or attachment is required");
@@ -1011,11 +1056,9 @@ const TasksPage: React.FC = () => {
     const addedComment = await addComment(taskId, commentText, attachments);
     if (addedComment) {
       // Comments state is already updated in addComment function
-      // No need to update it again here
     }
   }, [addComment]);
 
-  // Handle updating a comment with attachments
   const handleUpdateComment = useCallback(async (taskId: string, commentId: string, newText: string, attachments?: File[], removedAttachmentIds?: string[]) => {
     if (!newText.trim() && (!attachments || attachments.length === 0) && (!removedAttachmentIds || removedAttachmentIds.length === 0)) {
       toast.error("No changes detected");
@@ -1028,7 +1071,6 @@ const TasksPage: React.FC = () => {
     }
   }, [updateComment]);
 
-  // Handle deleting a comment
   const handleDeleteComment = useCallback(async (taskId: string, commentId: string) => {
     const deleted = await deleteComment(taskId, commentId);
     if (deleted) {
@@ -1036,7 +1078,6 @@ const TasksPage: React.FC = () => {
     }
   }, [deleteComment]);
 
-  // Handle deleting an attachment
   const handleDeleteAttachment = useCallback(async (taskId: string, commentId: string, attachmentId: string) => {
     const deleted = await deleteAttachment(taskId, commentId, attachmentId);
     if (deleted) {
@@ -1044,35 +1085,29 @@ const TasksPage: React.FC = () => {
     }
   }, [deleteAttachment]);
 
-  // Handle tagging an employee in comment
   const handleTagEmployee = useCallback((employeeName: string) => {
     console.log(`Tagged employee: ${employeeName}`);
     toast.info(`Tagged ${employeeName} in comment`);
   }, []);
 
-  // Initialize user data from localStorage
   useEffect(() => {
     if (typeof window !== "undefined") {
-      // Generate a unique userId if not exists
       const generateUserId = (): string => {
         return `user-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
       };
 
-      // Get or set userId
       let userId = localStorage.getItem("userId");
       if (!userId) {
         userId = generateUserId();
         localStorage.setItem("userId", userId);
       }
 
-      // Get or set userRole
       let userRole = localStorage.getItem("userRole");
       if (!userRole) {
         userRole = "Employee";
         localStorage.setItem("userRole", userRole);
       }
 
-      // Get or set userName
       let userName = localStorage.getItem("userName");
       if (!userName) {
         userName = "Barath Krish";
@@ -1085,7 +1120,6 @@ const TasksPage: React.FC = () => {
         userName
       });
 
-      // Set state
       setCurrentUserId(userId);
       setCurrentUserRole(userRole);
       setCurrentUserName(userName);
@@ -1094,7 +1128,6 @@ const TasksPage: React.FC = () => {
     }
   }, []);
 
-  // Fetch data
   useEffect(() => {
     const init = async () => {
       setLoading(true);
@@ -1103,18 +1136,23 @@ const TasksPage: React.FC = () => {
     init();
   }, [fetchTasks]);
 
-  // Filter tasks based on role and search
   const filteredTasks = useMemo(() => {
     console.log("Current user:", { currentUserRole, currentUserName, currentUserId });
     
-    let base = tasks.map(task => ({
-      ...task,
-      name: task.summary || task.title || task.name || `Task ${task.taskId || task._id?.substring(0, 8)}`,
-      taskDisplayName: task.summary || task.title || task.name || `Task ${task.taskId || task._id?.substring(0, 8)}`,
-      commentCount: task.commentCount || 0,
-      lastCommentAt: task.lastCommentAt,
-      comments: task.comments || []
-    }));
+    let base = tasks.map(task => {
+      // Calculate progress from subtasks
+      const calculatedProgress = calculateTaskProgressFromSubtasks(task.subtasks);
+      
+      return {
+        ...task,
+        completion: calculatedProgress, // Override with calculated progress
+        name: task.summary || task.title || task.name || `Task ${task.taskId || task._id?.substring(0, 8)}`,
+        taskDisplayName: task.summary || task.title || task.name || `Task ${task.taskId || task._id?.substring(0, 8)}`,
+        commentCount: task.commentCount || 0,
+        lastCommentAt: task.lastCommentAt,
+        comments: task.comments || []
+      };
+    });
     
     // Apply role-based filtering
     if (currentUserRole === "Employee" && currentUserName) {
@@ -1169,7 +1207,6 @@ const TasksPage: React.FC = () => {
     return base;
   }, [tasks, currentUserRole, currentUserName, currentUserId, searchTerm, statusFilter]);
 
-  // Stats for employee dashboard
   const taskStats = useMemo(() => {
     if (currentUserRole !== "Employee") {
       return { total: 0, completed: 0, inProgress: 0, todo: 0 };
@@ -1195,14 +1232,12 @@ const TasksPage: React.FC = () => {
     };
   }, [filteredTasks, currentUserRole, currentUserName, currentUserId]);
 
-  // Add a manual refresh button for debugging
   const handleRefresh = async () => {
     setLoading(true);
     await fetchTasks();
     toast.info("Tasks refreshed");
   };
 
-  // Function to simulate login for testing
   const handleTestLogin = () => {
     const testUser = {
       name: "Barath Krish",
@@ -1220,7 +1255,6 @@ const TasksPage: React.FC = () => {
     
     toast.success(`Logged in as ${testUser.name}`);
     
-    // Refresh data
     handleRefresh();
   };
 

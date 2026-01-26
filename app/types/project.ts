@@ -30,6 +30,8 @@ export interface SavedProject {
   progress?: number;
 }
 
+
+
 export interface Epic {
   _id: string;
   epicId: string;
@@ -61,50 +63,68 @@ export interface Epic {
 export interface Task {
   _id: string;
   taskId: string;
-  issueKey?: string;  // Added for Jira-style keys
-  name: string;
-  summary?: string;   // Added for compatibility with tasks management
+
+  // Issue info
+  issueKey?: string;
+  name?: string;
+  summary?: string;
   description: string;
-  issueType?: "Story" | "Task" | "Bug" | "Feature"; // Added for tasks management
+
+  // Types
+  issueType?: "Story" | "Task" | "Bug" | "Feature";
+  type?: "Task" | "Bug" | "Story" | "Feature";
+
+  // Status & priority
   status: "Backlog" | "Todo" | "In Progress" | "Review" | "Done" | "Blocked";
   priority: "Lowest" | "Low" | "Medium" | "High" | "Highest" | "Critical";
-  type: "Task" | "Bug" | "Story" | "Feature";
-  storyPoints?: number;
-  dueDate?: string;
+
+  // Relations
   assigneeId?: string;
-  assigneeIds?: string[];  // Added for multiple assignees
-  reporterId: string;
-  reporterIds?: string[];  // Added for multiple reporters
+  assigneeIds?: string[];
+  reporterId?: string;
+  reporterIds?: string[];
+
   epicId: string;
   epicName?: string;
+
   projectId: string;
   projectKey?: string;
   projectName?: string;
-  labels: string[];
-  createdAt: string;
-  updatedAt: string;
+
   sprintId?: string;
-  
-  // Hours tracking
+
+  // Time & progress
+  storyPoints?: number;
+  dueDate?: string;
+  duration?: number;
+
   estimatedHours?: number;
   actualHours?: number;
-  
-  // Duration
-  duration?: number;
-  
-  // Attachments and comments
+
+  completion?: number; // Manual
+  subtaskProgress?: number; // Auto-calculated
+  overallProgress?: number; // Combined
+
+  // Labels & metadata
+  labels: string[];
+
+  createdAt: string;
+  updatedAt: string;
+  createdBy?: string;
+
+  // Attachments & comments
   attachments?: string[];
-  comments?: Comment[];
-  
+  comments?: (TaskComment | Comment)[];
+
   // Subtasks
   subtasks?: Subtask[];
-  
-  // For populated data
+
+  // Populated employee objects
   assignee?: Employee;
   reporter?: Employee;
   assignees?: Employee[];
   reporters?: Employee[];
-  
+
   // Display fields
   assigneeNames?: string[];
   reporterNames?: string[];
@@ -112,8 +132,8 @@ export interface Task {
   reporterEmails?: string[];
   assigneeRoles?: string[];
   reporterRoles?: string[];
-  createdBy?: string;
 }
+
 
 export interface Subtask {
   _id: string;
@@ -136,6 +156,18 @@ export interface Comment {
   content: string;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface TaskComment {
+  _id: string;
+  taskId: string;
+  authorId: string;
+  authorName?: string;
+  authorEmail?: string;
+  message: string;
+  attachments?: string[];
+  createdAt: string;
+  updatedAt?: string;
 }
 
 export interface Sprint {

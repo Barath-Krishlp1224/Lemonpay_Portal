@@ -86,6 +86,51 @@ const sumAllSubtasksStoryPoints = (subtasks: Subtask[] | undefined | null): numb
   }, 0);
 };
 
+// Calculate main task progress based on subtask progress
+const calculateTaskProgressFromSubtasks = (subtasks: Subtask[] | undefined | null): number => {
+  if (!subtasks || subtasks.length === 0) return 0;
+  
+  const calculateSubtaskProgress = (subtask: Subtask): number => {
+    if ('progress' in subtask && subtask.progress !== undefined) {
+      return Number(subtask.progress) || 0;
+    }
+    
+    switch (subtask.status?.toLowerCase()) {
+      case "completed":
+      case "done":
+        return 100;
+      case "in progress":
+        return 50;
+      case "paused":
+        return 25;
+      case "to do":
+      case "todo":
+      default:
+        return 0;
+    }
+  };
+  
+  const flattenSubtasks = (subtasksList: Subtask[]): Subtask[] => {
+    let flatList: Subtask[] = [];
+    subtasksList.forEach(sub => {
+      flatList.push(sub);
+      if (sub.subtasks && sub.subtasks.length > 0) {
+        flatList = [...flatList, ...flattenSubtasks(sub.subtasks)];
+      }
+    });
+    return flatList;
+  };
+  
+  const allSubtasks = flattenSubtasks(subtasks);
+  if (allSubtasks.length === 0) return 0;
+  
+  const totalProgress = allSubtasks.reduce((sum, sub) => {
+    return sum + calculateSubtaskProgress(sub);
+  }, 0);
+  
+  return Math.round(totalProgress / allSubtasks.length);
+};
+
 // --- All Task Statuses ---
 const allTaskStatuses = [
   "Icebox",
@@ -170,6 +215,19 @@ const canUserEditSubtask = (subtask: Subtask, currentUser: { name: string; role:
   if (currentUser.role === "Employee") {
     if (!subtask.assigneeName) return true;
     return subtask.assigneeName.toLowerCase() === currentUser.name.toLowerCase();
+  }
+  
+  return false;
+};
+
+// --- Check if user can edit task based on progress ---
+const canEditTaskBasedOnProgress = (taskProgress: number, currentUserRole: string): boolean => {
+  // Admins and Managers can always edit
+  if (currentUserRole === "Admin" || currentUserRole === "Manager") return true;
+  
+  // Employees can only edit if progress is less than 100%
+  if (currentUserRole === "Employee") {
+    return taskProgress < 100;
   }
   
   return false;
@@ -1535,6 +1593,12 @@ const TaskModal: React.FC<TaskModalProps> = (props) => {
   
   const totalTime = useMemo(() => sumAllSubtasksTime(subtasksToDisplay), [subtasksToDisplay]);
   const totalPoints = useMemo(() => sumAllSubtasksStoryPoints(subtasksToDisplay), [subtasksToDisplay]);
+  
+  // Calculate task progress from subtasks
+  const calculatedTaskProgress = useMemo(() => {
+    return calculateTaskProgressFromSubtasks(subtasksToDisplay);
+  }, [subtasksToDisplay]);
+  
   const current = isEditing ? draftTask : task;
 
   const taskDisplayName = task.displayName || 
@@ -1545,21 +1609,27 @@ const TaskModal: React.FC<TaskModalProps> = (props) => {
 
   const epicName = task.epicName || task.projectName || 'Epic not specified';
 
+  // Determine if task can be edited based on progress
   const canEditTask = useMemo(() => {
     if (currentUser.role === "Admin" || currentUser.role === "Manager") return true;
     
     if (currentUser.role === "Employee") {
+      // Check if task is assigned to current user
       if (!task.assigneeNames || task.assigneeNames.length === 0) return true;
       
       const isAssigned = task.assigneeNames?.some(
         name => name.toLowerCase() === currentUser.name.toLowerCase()
       );
       
+      // Check progress restriction
+      const taskProgress = calculatedTaskProgress;
+      if (taskProgress >= 100) return false; // Cannot edit if progress is 100%
+      
       return isAssigned;
     }
     
     return false;
-  }, [task, currentUser]);
+  }, [task, currentUser, calculatedTaskProgress]);
 
   const canEditSubtasks = useMemo(() => {
     if (currentUser.role === "Admin" || currentUser.role === "Manager") return true;
@@ -1694,7 +1764,12 @@ const TaskModal: React.FC<TaskModalProps> = (props) => {
             {[
               { label: "Logged Effort", val: `${totalTime} hrs`, icon: <Clock className="text-blue-500"/> },
               { label: "Story Points", val: `${task.taskStoryPoints || 0} SP`, icon: <BarChart3 className="text-purple-500"/> },
-              { label: "Progress", val: `${current.completion || 0}%`, icon: <CheckCircle2 className="text-emerald-500"/> },
+              { 
+                label: "Progress", 
+                val: `${calculatedTaskProgress}%`, 
+                icon: <CheckCircle2 className="text-emerald-500"/>,
+                description: "Calculated from subtasks"
+              },
               { label: "Current State", val: current.status || "Backlog", icon: <AlertCircle className="text-orange-500"/> }
             ].map((s, i) => (
               <div key={i} className="bg-white p-6 rounded-[2rem] border border-slate-100 shadow-sm flex items-center gap-5">
@@ -1702,6 +1777,9 @@ const TaskModal: React.FC<TaskModalProps> = (props) => {
                 <div>
                   <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">{s.label}</p>
                   <p className="text-xl font-black text-black">{s.val}</p>
+                  {s.description && (
+                    <p className="text-[10px] text-slate-400 mt-1">{s.description}</p>
+                  )}
                 </div>
               </div>
             ))}
@@ -1713,9 +1791,18 @@ const TaskModal: React.FC<TaskModalProps> = (props) => {
               <div className="flex items-center justify-between mb-8 pb-4 border-b">
                 <h3 className="text-xs font-black text-slate-800 uppercase tracking-[0.2em]">Task Details</h3>
                 {!canEditTask && (
-                  <div className="flex items-center gap-1 text-slate-400">
-                    <Eye size={14} />
-                    <span className="text-[10px] font-bold">Read Only Mode</span>
+                  <div className="flex items-center gap-2">
+                    {calculatedTaskProgress >= 100 ? (
+                      <div className="flex items-center gap-1 bg-emerald-100 text-emerald-700 px-3 py-1.5 rounded-full">
+                        <CheckCircle2 size={14} />
+                        <span className="text-xs font-bold">Task Completed</span>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-1 text-slate-400">
+                        <Eye size={14} />
+                        <span className="text-[10px] font-bold">Read Only Mode</span>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -1734,6 +1821,7 @@ const TaskModal: React.FC<TaskModalProps> = (props) => {
                       value={current.summary || ""} 
                       onChange={handleDraftChange} 
                       className="w-full p-4 bg-slate-50 rounded-2xl font-bold border-none focus:ring-2 ring-blue-500 outline-none text-sm text-black placeholder:text-slate-500" 
+                      disabled={!canEditTask}
                     />
                   ) : (
                     <div className="p-4 bg-slate-50 rounded-2xl font-bold text-black text-sm min-h-[60px]">
@@ -1754,6 +1842,7 @@ const TaskModal: React.FC<TaskModalProps> = (props) => {
                       value={current.assigneeNames?.[0] || ""} 
                       onChange={handleDraftChange} 
                       className="w-full p-4 bg-slate-50 rounded-2xl font-bold border-none focus:ring-2 ring-blue-500 outline-none text-sm text-black"
+                      disabled={!canEditTask}
                     >
                       <option value="" className="text-slate-500 italic">Unassigned</option>
                       {employees.map(e => <option key={e._id} value={e.name} className="text-black">{e.name}</option>)}
@@ -1792,6 +1881,7 @@ const TaskModal: React.FC<TaskModalProps> = (props) => {
                       value={current.status} 
                       onChange={isEditing ? handleDraftChange : (e) => onTaskStatusChange(task._id, e.target.value)} 
                       className={`w-full p-4 rounded-2xl font-black border focus:ring-2 ring-blue-500 outline-none text-sm text-black transition-all ${getStatusBgColor(current.status)}`}
+                      disabled={!canEditTask}
                     >
                       {allTaskStatuses.map(s => <option key={s} value={s} className="bg-white text-black font-bold">{s}</option>)}
                     </select>
@@ -1815,6 +1905,7 @@ const TaskModal: React.FC<TaskModalProps> = (props) => {
                       value={current.dueDate || ""} 
                       onChange={handleDraftChange} 
                       className="w-full p-4 bg-slate-50 rounded-2xl font-bold border-none focus:ring-2 ring-blue-500 outline-none text-sm text-black" 
+                      disabled={!canEditTask}
                     />
                   ) : (
                     <div className="p-4 bg-slate-50 rounded-2xl font-bold text-black text-sm min-h-[60px]">
@@ -1841,29 +1932,36 @@ const TaskModal: React.FC<TaskModalProps> = (props) => {
                 <div className="space-y-2">
                   <label className="text-[10px] font-black text-slate-400 uppercase">Completion</label>
                   {isEditing ? (
-                    <input 
-                      type="number" 
-                      name="completion" 
-                      placeholder="0" 
-                      value={current.completion || 0} 
-                      onChange={handleDraftChange} 
-                      className="w-full p-4 bg-slate-50 rounded-2xl font-bold border-none focus:ring-2 ring-blue-500 outline-none text-sm text-black placeholder:text-slate-500" 
-                      min="0"
-                      max="100"
-                    />
+                    <div className="relative">
+                      <input 
+                        type="number" 
+                        name="completion" 
+                        placeholder="0" 
+                        value={calculatedTaskProgress} 
+                        readOnly
+                        className="w-full p-4 bg-slate-50 rounded-2xl font-bold border-none text-sm text-black cursor-not-allowed" 
+                        title="Progress is calculated from subtasks and cannot be manually edited"
+                      />
+                      <div className="absolute right-3 top-1/2 transform -translate-y-1/2">
+                        <Lock size={16} className="text-slate-400" />
+                      </div>
+                    </div>
                   ) : (
                     <div className="p-4 bg-slate-50 rounded-2xl font-bold text-black text-sm min-h-[60px]">
                       <div className="flex items-center justify-between mb-1">
                         <span>Progress</span>
-                        <span className={`font-black ${task.completion === 100 ? 'text-emerald-600' : task.completion >= 70 ? 'text-blue-600' : task.completion >= 30 ? 'text-amber-600' : 'text-rose-600'}`}>
-                          {task.completion || 0}%
+                        <span className={`font-black ${calculatedTaskProgress === 100 ? 'text-emerald-600' : calculatedTaskProgress >= 70 ? 'text-blue-600' : calculatedTaskProgress >= 30 ? 'text-amber-600' : 'text-rose-600'}`}>
+                          {calculatedTaskProgress}%
                         </span>
                       </div>
                       <div className="w-full bg-slate-200 h-2 rounded-full overflow-hidden">
                         <div 
-                          className={`h-full ${task.completion === 100 ? 'bg-emerald-500' : task.completion >= 70 ? 'bg-blue-500' : task.completion >= 30 ? 'bg-amber-500' : 'bg-rose-500'}`}
-                          style={{ width: `${task.completion || 0}%` }}
+                          className={`h-full ${calculatedTaskProgress === 100 ? 'bg-emerald-500' : calculatedTaskProgress >= 70 ? 'bg-blue-500' : calculatedTaskProgress >= 30 ? 'bg-amber-500' : 'bg-rose-500'}`}
+                          style={{ width: `${calculatedTaskProgress}%` }}
                         />
+                      </div>
+                      <div className="text-[10px] text-slate-400 mt-1">
+                        Auto-calculated from subtasks
                       </div>
                     </div>
                   )}
@@ -1884,6 +1982,7 @@ const TaskModal: React.FC<TaskModalProps> = (props) => {
                       onChange={handleDraftChange} 
                       rows={3} 
                       className="w-full p-5 bg-slate-50 rounded-2xl font-bold border-none focus:ring-2 ring-blue-500 outline-none resize-none text-sm text-black placeholder:text-slate-500" 
+                      disabled={!canEditTask}
                     />
                   ) : (
                     <div className="p-5 bg-slate-50 rounded-2xl font-bold text-black leading-relaxed text-sm min-h-[80px]">
@@ -1933,13 +2032,18 @@ const TaskModal: React.FC<TaskModalProps> = (props) => {
                   <ListTree className="w-4 h-4 text-slate-400" />
                   <h3 className="text-xs font-black text-slate-800 uppercase tracking-[0.2em]">Work Breakdown Structure</h3>
                   <div className="text-xs text-slate-400">
-                    ({subtasksToDisplay?.length || 0} subtasks)
+                    ({subtasksToDisplay?.length || 0} subtasks) • 
+                    <span className="ml-1 text-emerald-600 font-bold">
+                      Main progress: {calculatedTaskProgress}%
+                    </span>
                   </div>
                 </div>
                 {canEditSubtasks && !isEditing && (
                   <button 
                     onClick={() => handleEdit(task)} 
                     className="text-xs font-bold text-blue-600 hover:text-blue-800 flex items-center gap-1"
+                    disabled={calculatedTaskProgress >= 100}
+                    title={calculatedTaskProgress >= 100 ? "Cannot edit completed task" : "Edit Subtasks"}
                   >
                     <Edit2 size={12} />
                     Edit Subtasks
@@ -1947,7 +2051,7 @@ const TaskModal: React.FC<TaskModalProps> = (props) => {
                 )}
               </div>
               {isEditing ? (
-                canEditSubtasks ? (
+                canEditSubtasks && calculatedTaskProgress < 100 ? (
                   <TaskSubtaskEditor
                     subtasks={subtasks}
                     employees={employees}
@@ -1962,6 +2066,12 @@ const TaskModal: React.FC<TaskModalProps> = (props) => {
                     currentUserRole={currentUser.role}
                     currentUserName={currentUser.name}
                   />
+                ) : calculatedTaskProgress >= 100 ? (
+                  <div className="bg-white p-6 rounded-[2rem] border border-slate-100 shadow-sm text-center">
+                    <CheckCircle2 size={24} className="mx-auto text-emerald-500 mb-2" />
+                    <p className="text-sm text-emerald-600 font-bold">Task is 100% complete</p>
+                    <p className="text-slate-500 text-sm mt-1">Subtasks cannot be edited for completed tasks</p>
+                  </div>
                 ) : (
                   <div className="bg-white p-6 rounded-[2rem] border border-slate-100 shadow-sm text-center">
                     <Lock size={24} className="mx-auto text-slate-300 mb-2" />
@@ -1976,6 +2086,11 @@ const TaskModal: React.FC<TaskModalProps> = (props) => {
                         <div className="flex items-center justify-between text-xs">
                           <div className="text-slate-500">
                             Subtasks are visible to all team members. Only assignees can modify their own subtasks.
+                            {calculatedTaskProgress >= 100 && (
+                              <span className="ml-2 text-emerald-600 font-bold">
+                                Task is 100% complete - editing is disabled
+                              </span>
+                            )}
                           </div>
                           <div className="flex items-center gap-2">
                             <div className="flex items-center gap-1">
@@ -2004,7 +2119,7 @@ const TaskModal: React.FC<TaskModalProps> = (props) => {
                       </div>
                       <p className="text-slate-500 font-medium">No subtasks defined</p>
                       <p className="text-slate-400 text-sm mt-1">Add subtasks to break down the work</p>
-                      {canEditSubtasks && (
+                      {canEditSubtasks && calculatedTaskProgress < 100 && (
                         <button 
                           onClick={() => handleEdit(task)} 
                           className="mt-4 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-bold hover:bg-blue-700 transition-colors"
@@ -2023,7 +2138,7 @@ const TaskModal: React.FC<TaskModalProps> = (props) => {
         {/* Action Footer with permission-based controls */}
         <div className="p-10 border-t border-slate-100 flex justify-end gap-4 bg-white sticky bottom-0 z-20">
           {/* Only show "Start Sprint" for tasks in Icebox or Backlog status */}
-          {(task.status === "Icebox" || task.status === "Backlog") && !isEditing && canEditTask && (
+          {(task.status === "Icebox" || task.status === "Backlog") && !isEditing && canEditTask && calculatedTaskProgress < 100 && (
              <button onClick={() => handleStartSprint(task._id)} className="px-8 py-4 bg-emerald-500 hover:bg-emerald-600 text-white rounded-[2rem] font-black text-[10px] uppercase shadow-lg transition-all flex items-center gap-2">
                 <Play size={18}/> Start Sprint
              </button>
@@ -2031,10 +2146,16 @@ const TaskModal: React.FC<TaskModalProps> = (props) => {
 
           {isEditing ? (
             <>
-              {canEditTask && (
+              {canEditTask && calculatedTaskProgress < 100 && (
                 <button onClick={handleUpdate} className="px-10 py-4 bg-blue-600 hover:bg-blue-700 text-white rounded-[2rem] font-black text-[10px] uppercase shadow-xl transition-all flex items-center gap-2">
-                  <Save size={18}/> Commit Changes
+                    <Save size={18}/> Commit Changes
                 </button>
+              )}
+              {calculatedTaskProgress >= 100 && (
+                <div className="flex items-center gap-2 px-4 py-2 bg-emerald-50 text-emerald-700 rounded-lg">
+                  <CheckCircle2 size={16} />
+                  <span className="text-sm font-bold">Task is 100% complete - cannot save changes</span>
+                </div>
               )}
               <button onClick={cancelEdit} className="px-10 py-4 bg-slate-100 hover:bg-slate-200 text-slate-500 rounded-[2rem] font-black text-[10px] uppercase transition-all">
                 Cancel
@@ -2042,10 +2163,16 @@ const TaskModal: React.FC<TaskModalProps> = (props) => {
             </>
           ) : (
             <>
-              {canEditTask && (
+              {canEditTask && calculatedTaskProgress < 100 && (
                 <button onClick={() => handleEdit(task)} className="px-10 py-4 bg-slate-900 hover:bg-blue-600 text-white rounded-[2rem] font-black text-[10px] uppercase shadow-xl transition-all flex items-center gap-2">
-                  <Edit2 size={18}/> Modify Task
+                    <Edit2 size={18}/> Modify Task
                 </button>
+              )}
+              {calculatedTaskProgress >= 100 && canEditTask && (
+                <div className="flex items-center gap-2 px-4 py-2 bg-emerald-50 text-emerald-700 rounded-lg">
+                  <CheckCircle2 size={16} />
+                  <span className="text-sm font-bold">Task Completed - Read Only</span>
+                </div>
               )}
               {(currentUser.role === "Admin" || currentUser.role === "Manager") && (
                 <button onClick={() => handleDelete(task._id)} className="px-10 py-4 text-red-500 hover:bg-red-50 rounded-[2rem] font-black text-[10px] uppercase transition-all flex items-center gap-2">

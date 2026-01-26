@@ -10,17 +10,23 @@ import {
   CheckSquare, Square, BookOpen, Bug, Download,
   Filter, FileSpreadsheet, Calendar as CalendarIcon,
   ChevronLeft, ChevronRight as ChevronRightIcon, Search,
-  X, UserCheck, Users as UsersIcon, Filter as FilterIcon
+  X, UserCheck, Users as UsersIcon, Filter as FilterIcon,
+  Loader2, Sparkles, AlertTriangle, List, ListTree, FilePieChart
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import type { Employee, SavedProject, Epic } from "@/app/types/project";
+
+// Add PDF generation imports
+import { jsPDF } from "jspdf";
+import "jspdf-autotable";
+import autoTable from "jspdf-autotable";
 
 interface Subtask {
   _id: string;
   title: string;
   assigneeId: string;
   assigneeName: string;
-  status: "Todo" | "In Progress" | "Done";
+  status: "Todo" | "In Progress" | "Done" | "Blocked";
   progressPercentage: number;
   taskId: string;
   createdAt: string;
@@ -100,45 +106,60 @@ const TaskCard: React.FC<TaskCardProps> = ({
   const assigneeNames = getAssigneeNames(task);
   const reporterNames = getReporterNames(task);
   
+  // Get subtask status icon
+  const getSubtaskStatusIcon = (status: Subtask["status"]) => {
+    switch(status) {
+      case "Done": return <CheckSquare size={14} className="text-green-500" />;
+      case "In Progress": return <ClockIcon size={14} className="text-blue-500" />;
+      case "Blocked": return <AlertTriangle size={14} className="text-red-500" />;
+      case "Todo": return <Square size={14} className="text-gray-400" />;
+      default: return <Square size={14} className="text-gray-400" />;
+    }
+  };
+  
   return (
-    <div className="border-2 border-slate-200 rounded-2xl">
+    <div className="border-2 border-gray-200 rounded-2xl">
       <div 
-        className="p-4 cursor-pointer hover:bg-slate-50 transition-colors"
+        className="p-4 cursor-pointer hover:bg-gray-50 transition-colors"
         onClick={onToggle}
       >
         <div className="flex items-start justify-between mb-3">
           <div className="flex flex-wrap gap-2">
             <div className={`px-2 py-1 rounded-lg text-xs font-bold flex items-center gap-1 ${getIssueTypeColor(task.issueType)}`}>
               {getIssueTypeIcon(task.issueType)}
-              <span>{task.issueType}</span>
+              <span className="text-black">{task.issueType}</span>
+            </div>
+            <div className="px-2 py-1 rounded-lg text-xs font-bold flex items-center gap-1 bg-blue-50 border border-blue-200">
+              <List size={10} className="text-blue-600" />
+              <span className="text-black">Main Task</span>
             </div>
             <div className={`px-2 py-1 rounded-lg text-xs font-bold flex items-center gap-1 ${getStatusColor(task.status)}`}>
-              {task.status}
+              <span className="text-black">{task.status}</span>
             </div>
             <div className={`px-2 py-1 rounded-lg text-xs font-bold flex items-center gap-1 ${getPriorityColor(task.priority)}`}>
               <Flag size={10} />
-              {task.priority}
+              <span className="text-black">{task.priority}</span>
             </div>
           </div>
           
           <div className="flex items-center gap-2">
             <div className="text-right">
-              <div className="text-xs text-slate-500">Progress</div>
-              <div className="text-sm font-bold text-slate-800">{progress}%</div>
+              <div className="text-xs text-gray-500">Progress</div>
+              <div className="text-sm font-bold text-black">{progress}%</div>
             </div>
             {isExpanded ? (
-              <ChevronDown size={20} className="text-slate-500" />
+              <ChevronDown size={20} className="text-gray-500" />
             ) : (
-              <ChevronRight size={20} className="text-slate-500" />
+              <ChevronRight size={20} className="text-gray-500" />
             )}
           </div>
         </div>
         
         <div className="flex items-start justify-between">
           <div className="flex-1">
-            <h4 className="font-bold text-slate-800 mb-1">{task.summary}</h4>
-            <div className="flex items-center gap-3 text-xs text-slate-500">
-              <span className="font-mono font-bold bg-slate-100 px-2 py-0.5 rounded">
+            <h4 className="font-bold text-black mb-1">{task.summary}</h4>
+            <div className="flex items-center gap-3 text-xs text-gray-500">
+              <span className="font-mono font-bold bg-gray-100 px-2 py-0.5 rounded text-black">
                 {task.issueKey}
               </span>
               <span className="flex items-center gap-1">
@@ -148,14 +169,14 @@ const TaskCard: React.FC<TaskCardProps> = ({
               {task.dueDate && (
                 <span className="flex items-center gap-1">
                   <Clock size={12} />
-                  Due: {formatDate(task.dueDate)}
+                  <span className="text-black">Due: {formatDate(task.dueDate)}</span>
                 </span>
               )}
             </div>
           </div>
           
           {task.storyPoints > 0 && (
-            <div className="px-3 py-1 bg-slate-100 text-slate-700 text-xs font-bold rounded-full border border-slate-200">
+            <div className="px-3 py-1 bg-gray-100 text-black text-xs font-bold rounded-full border border-gray-200">
               {task.storyPoints} SP
             </div>
           )}
@@ -163,17 +184,17 @@ const TaskCard: React.FC<TaskCardProps> = ({
         
         {/* Assignees and Reporters */}
         {(assigneeNames.length > 0 || reporterNames.length > 0) && (
-          <div className="flex items-start gap-6 text-xs text-slate-600 mt-3">
+          <div className="flex items-start gap-6 text-xs text-gray-600 mt-3">
             {assigneeNames.length > 0 && (
               <div>
-                <div className="text-slate-500 mb-1">Assignees:</div>
+                <div className="text-gray-500 mb-1">Assignees:</div>
                 <div className="flex flex-wrap gap-1">
                   {assigneeNames.map((name: string, index: number) => (
-                    <div key={index} className="flex items-center gap-1 bg-slate-100 px-2 py-1 rounded-lg">
-                      <div className="w-4 h-4 bg-slate-300 rounded-full flex items-center justify-center text-[8px] font-bold">
+                    <div key={index} className="flex items-center gap-1 bg-gray-100 px-2 py-1 rounded-lg">
+                      <div className="w-4 h-4 bg-gray-300 rounded-full flex items-center justify-center text-[8px] font-bold text-black">
                         {name.charAt(0)}
                       </div>
-                      <span className="font-medium text-[11px]">{name}</span>
+                      <span className="font-medium text-[11px] text-black">{name}</span>
                     </div>
                   ))}
                 </div>
@@ -181,12 +202,12 @@ const TaskCard: React.FC<TaskCardProps> = ({
             )}
             {reporterNames.length > 0 && (
               <div>
-                <div className="text-slate-500 mb-1">Reporters:</div>
+                <div className="text-gray-500 mb-1">Reporters:</div>
                 <div className="flex flex-wrap gap-1">
                   {reporterNames.map((name: string, index: number) => (
-                    <div key={index} className="flex items-center gap-1 bg-slate-100 px-2 py-1 rounded-lg">
-                      <User size={10} className="text-slate-400" />
-                      <span className="font-medium text-[11px]">{name}</span>
+                    <div key={index} className="flex items-center gap-1 bg-gray-100 px-2 py-1 rounded-lg">
+                      <User size={10} className="text-gray-400" />
+                      <span className="font-medium text-[11px] text-black">{name}</span>
                     </div>
                   ))}
                 </div>
@@ -197,14 +218,18 @@ const TaskCard: React.FC<TaskCardProps> = ({
         
         {/* Progress Bar */}
         <div className="mt-3">
-          <div className="w-full bg-slate-200 rounded-full h-2">
+          <div className="flex items-center justify-between mb-1">
+            <span className="text-xs text-gray-500">Task Progress</span>
+            <span className="text-xs font-bold text-black">{progress}%</span>
+          </div>
+          <div className="w-full bg-gray-200 rounded-full h-2">
             <div 
               className={`h-2 rounded-full transition-all ${
                 progress === 100 ? 'bg-green-500' :
                 progress >= 50 ? 'bg-blue-500' :
                 'bg-yellow-500'
               }`}
-              style={{ width: `${progress}%` }}
+              style={{ width: `${Math.min(progress, 100)}%` }}
             />
           </div>
         </div>
@@ -213,52 +238,53 @@ const TaskCard: React.FC<TaskCardProps> = ({
       {/* Subtasks (if expanded) */}
       {isExpanded && task.subtasks && task.subtasks.length > 0 && (
         <div className="p-4 pt-0">
-          <div className="mt-4 border-t border-slate-100 pt-4">
-            <h5 className="text-sm font-bold text-slate-700 mb-3 flex items-center gap-2">
-              <CheckSquare size={16} />
+          <div className="mt-4 border-t border-gray-100 pt-4">
+            <h5 className="text-sm font-bold text-black mb-3 flex items-center gap-2">
+              <ListTree size={16} />
               Subtasks ({task.subtasks.length})
             </h5>
             
             <div className="space-y-3">
               {task.subtasks.map((subtask: Subtask) => (
-                <div key={subtask._id} className="p-3 bg-slate-50 rounded-xl border border-slate-200">
+                <div key={subtask._id} className="p-3 bg-gray-50 rounded-xl border border-gray-200">
                   <div className="flex items-center justify-between mb-2">
                     <div className="flex items-center gap-3">
                       <div className="flex items-center gap-1">
-                        {subtask.status === "Done" ? (
-                          <CheckSquare size={14} className="text-green-500" />
-                        ) : (
-                          <Square size={14} className="text-slate-400" />
-                        )}
-                        <span className="font-medium text-slate-800">{subtask.title}</span>
+                        {getSubtaskStatusIcon(subtask.status)}
+                        <span className="font-medium text-black">{subtask.title}</span>
+                      </div>
+                      <div className="px-2 py-0.5 rounded-lg text-xs font-bold flex items-center gap-1 bg-purple-50 border border-purple-200">
+                        <ListTree size={8} className="text-purple-600" />
+                        <span className="text-black">Subtask</span>
                       </div>
                       <div className={`px-2 py-0.5 text-xs font-bold rounded-full ${getSubtaskStatusColor(subtask.status)}`}>
-                        {subtask.status}
+                        <span className="text-black">{subtask.status}</span>
                       </div>
                     </div>
-                    <div className="text-sm font-bold text-slate-800">{subtask.progressPercentage}%</div>
+                    <div className="text-sm font-bold text-black">{subtask.progressPercentage}%</div>
                   </div>
                   
-                  <div className="flex items-center justify-between text-xs text-slate-600">
+                  <div className="flex items-center justify-between text-xs text-gray-600">
                     <div className="flex items-center gap-1">
-                      <User size={12} className="text-slate-400" />
-                      {subtask.assigneeName}
+                      <User size={12} className="text-gray-400" />
+                      <span className="text-black">{subtask.assigneeName}</span>
                     </div>
                     <div className="flex items-center gap-1">
-                      <CalendarDays size={12} className="text-slate-400" />
-                      Updated: {formatDate(subtask.updatedAt)}
+                      <CalendarDays size={12} className="text-gray-400" />
+                      <span className="text-black">Updated: {formatDate(subtask.updatedAt)}</span>
                     </div>
                   </div>
                   
                   {/* Subtask Progress Bar */}
-                  <div className="w-full bg-slate-200 rounded-full h-1.5 mt-2">
+                  <div className="w-full bg-gray-200 rounded-full h-1.5 mt-2">
                     <div 
                       className={`h-1.5 rounded-full ${
                         subtask.status === 'Done' ? 'bg-green-500' :
                         subtask.status === 'In Progress' ? 'bg-blue-500' :
+                        subtask.status === 'Blocked' ? 'bg-red-500' :
                         'bg-yellow-500'
                       }`}
-                      style={{ width: `${subtask.progressPercentage}%` }}
+                      style={{ width: `${Math.min(subtask.progressPercentage || 0, 100)}%` }}
                     />
                   </div>
                 </div>
@@ -299,10 +325,12 @@ export default function ProjectViewPage() {
   });
   const [reportIncludeSubtasks, setReportIncludeSubtasks] = useState(true);
   const [reportExporting, setReportExporting] = useState(false);
+  const [reportExportingPDF, setReportExportingPDF] = useState(false);
   const [reportAssigneeFilters, setReportAssigneeFilters] = useState<AssigneeFilter[]>([]);
   const [reportAssigneeSearch, setReportAssigneeSearch] = useState("");
   const [reportProjectFilter, setReportProjectFilter] = useState<string>("all");
   const [reportIncludeEpicTasks, setReportIncludeEpicTasks] = useState(true);
+  const [reportType, setReportType] = useState<'excel' | 'pdf'>('excel');
 
   // Progress statistics
   const [projectStats, setProjectStats] = useState({
@@ -382,7 +410,11 @@ export default function ProjectViewPage() {
         reporterNames: task.reporterNames || [],
         epicName: task.epicName || '',
         projectName: task.projectName || '',
-        subtasks: task.subtasks || [],
+        subtasks: (task.subtasks || []).map((subtask: any) => ({
+          ...subtask,
+          status: subtask.status || "Todo",
+          progressPercentage: subtask.progressPercentage || 0
+        })),
         summary: task.summary || '',
         issueKey: task.issueKey || task.taskId || `TASK-${task._id?.substring(0, 8) || 'N/A'}`,
         issueType: task.issueType || "Task",
@@ -522,19 +554,56 @@ export default function ProjectViewPage() {
 
   // Calculate task progress
   const calculateTaskProgress = (task: TaskWithSubtasks) => {
+    // If task has subtasks, calculate based on subtask progress
     if (task.subtasks && task.subtasks.length > 0) {
+      const totalSubtasks = task.subtasks.length;
       const doneSubtasks = task.subtasks.filter(s => s.status === "Done").length;
-      return Math.round((doneSubtasks / task.subtasks.length) * 100);
+      const inProgressSubtasks = task.subtasks.filter(s => s.status === "In Progress").length;
+      const blockedSubtasks = task.subtasks.filter(s => s.status === "Blocked").length;
+      
+      // If all subtasks are Done, return 100%
+      if (doneSubtasks === totalSubtasks) {
+        return 100;
+      }
+      
+      // Calculate weighted progress
+      let totalProgress = 0;
+      task.subtasks.forEach(subtask => {
+        let subtaskWeight = subtask.progressPercentage || 0;
+        
+        // Adjust weight based on status
+        if (subtask.status === "Done") {
+          subtaskWeight = 100;
+        } else if (subtask.status === "In Progress") {
+          subtaskWeight = Math.max(50, subtask.progressPercentage || 50);
+        } else if (subtask.status === "Blocked") {
+          subtaskWeight = Math.min(10, subtask.progressPercentage || 0);
+        } else if (subtask.status === "Todo") {
+          subtaskWeight = Math.min(15, subtask.progressPercentage || 0);
+        }
+        totalProgress += subtaskWeight;
+      });
+      
+      const averageProgress = Math.round(totalProgress / totalSubtasks);
+      return Math.min(100, averageProgress);
     }
     
+    // If no subtasks, calculate based on task status
     switch (task.status) {
-      case "Done": return 100;
-      case "In Progress": return 50;
-      case "Review": return 75;
-      case "Todo": return 10;
-      case "Backlog": return 0;
-      case "Blocked": return 0;
-      default: return 0;
+      case "Done": 
+        return 100;
+      case "In Progress": 
+        return 65;
+      case "Review": 
+        return 85;
+      case "Todo": 
+        return 15;
+      case "Backlog": 
+        return 5;
+      case "Blocked": 
+        return 10;
+      default: 
+        return 0;
     }
   };
 
@@ -564,14 +633,15 @@ export default function ProjectViewPage() {
 
   // Handle date range preset selection
   const handleDateRangePreset = (type: DateRangeType) => {
- const today = new Date();
-  let startDate: Date | null = null; 
-  let endDate: Date | null = null;  
+    const today = new Date();
+    let startDate: Date | null = null; 
+    let endDate: Date | null = null;  
 
     switch (type) {
       case 'thisWeek':
-        startDate = new Date(today.setDate(today.getDate() - today.getDay()));
-        endDate = new Date(today.setDate(today.getDate() - today.getDay() + 6));
+        const firstDayOfWeek = today.getDate() - today.getDay();
+        startDate = new Date(today.setDate(firstDayOfWeek));
+        endDate = new Date(today.setDate(firstDayOfWeek + 6));
         break;
       case 'thisMonth':
         startDate = new Date(today.getFullYear(), today.getMonth(), 1);
@@ -643,12 +713,14 @@ export default function ProjectViewPage() {
   const generateReportData = () => {
     const reportTasks = getReportTasks;
     
-    // Tasks data
+    // Main tasks data with "Main Task" indicator
     const tasksData = reportTasks.map(task => {
       const project = projects.find(p => p._id === task.projectId);
       const epic = epics.find(e => e._id === task.epicId);
+      const taskProgress = calculateTaskProgress(task);
       
       return {
+        'Task Type': 'Main Task',
         'Issue Key': task.issueKey,
         'Issue Type': task.issueType,
         'Summary': task.summary,
@@ -656,7 +728,7 @@ export default function ProjectViewPage() {
         'Status': task.status,
         'Priority': task.priority,
         'Story Points': task.storyPoints,
-        'Progress %': calculateTaskProgress(task),
+        'Progress %': taskProgress,
         'Assignees': getAssigneeNames(task).join(', '),
         'Assignee IDs': getAssigneeIds(task).join(', '),
         'Reporters': getReporterNames(task).join(', '),
@@ -666,26 +738,115 @@ export default function ProjectViewPage() {
         'Epic ID': epic?.epicId || 'N/A',
         'Created Date': formatDateForExcel(task.createdAt),
         'Updated Date': formatDateForExcel(task.updatedAt),
-        'Due Date': task.dueDate ? formatDateForExcel(task.dueDate) : ''
+        'Due Date': task.dueDate ? formatDateForExcel(task.dueDate) : '',
+        'Subtask Count': task.subtasks?.length || 0,
+        'Completion Status': taskProgress === 100 ? 'Complete' : taskProgress >= 50 ? 'In Progress' : 'Not Started',
+        'Is Blocked': task.status === 'Blocked' ? 'Yes' : 'No',
+        'Health Status': getTaskHealthStatus(task.status, taskProgress)
       };
     });
 
-    // Subtasks data
+    // Subtasks data with "Subtask" indicator
     const subtasksData: any[] = [];
     
     if (reportIncludeSubtasks) {
       reportTasks.forEach(task => {
         if (task.subtasks && task.subtasks.length > 0) {
           task.subtasks.forEach(subtask => {
+            const project = projects.find(p => p._id === task.projectId);
+            const epic = epics.find(e => e._id === task.epicId);
+            
             subtasksData.push({
+              'Task Type': 'Subtask',
               'Parent Issue Key': task.issueKey,
+              'Parent Task Summary': task.summary,
+              'Parent Status': task.status,
+              'Parent Progress': calculateTaskProgress(task),
+              'Subtask ID': subtask._id.substring(0, 8),
               'Subtask Title': subtask.title,
               'Assignee': subtask.assigneeName,
               'Assignee ID': subtask.assigneeId,
               'Status': subtask.status,
               'Progress %': subtask.progressPercentage,
               'Created Date': formatDateForExcel(subtask.createdAt),
-              'Updated Date': formatDateForExcel(subtask.updatedAt)
+              'Updated Date': formatDateForExcel(subtask.updatedAt),
+              'Is Blocked': subtask.status === 'Blocked' ? 'Yes' : 'No',
+              'Project': project?.name || 'Unknown',
+              'Project Key': project?.key || 'N/A',
+              'Epic': epic?.name || 'No Epic',
+              'Health Status': getSubtaskHealthStatus(subtask.status, subtask.progressPercentage)
+            });
+          });
+        }
+      });
+    }
+
+    // Combined tasks and subtasks for comprehensive view
+    const combinedTaskData: any[] = [];
+    
+    // Add main tasks
+    reportTasks.forEach(task => {
+      const project = projects.find(p => p._id === task.projectId);
+      const epic = epics.find(e => e._id === task.epicId);
+      const taskProgress = calculateTaskProgress(task);
+      
+      combinedTaskData.push({
+        'Task Type': 'Main Task',
+        'Task/Subtask ID': task.issueKey,
+        'Title': task.summary,
+        'Description': task.description || '',
+        'Status': task.status,
+        'Priority': task.priority,
+        'Progress %': taskProgress,
+        'Story Points': task.storyPoints,
+        'Assignees': getAssigneeNames(task).join(', '),
+        'Reporters': getReporterNames(task).join(', '),
+        'Project': project?.name || 'Unknown',
+        'Project Key': project?.key || 'N/A',
+        'Epic': epic?.name || 'No Epic',
+        'Epic ID': epic?.epicId || 'N/A',
+        'Created Date': formatDateForExcel(task.createdAt),
+        'Updated Date': formatDateForExcel(task.updatedAt),
+        'Due Date': task.dueDate ? formatDateForExcel(task.dueDate) : '',
+        'Has Subtasks': task.subtasks && task.subtasks.length > 0 ? 'Yes' : 'No',
+        'Completion Status': taskProgress === 100 ? 'Complete' : taskProgress >= 50 ? 'In Progress' : 'Not Started',
+        'Is Blocked': task.status === 'Blocked' ? 'Yes' : 'No',
+        'Health Status': getTaskHealthStatus(task.status, taskProgress)
+      });
+    });
+    
+    // Add subtasks if included
+    if (reportIncludeSubtasks) {
+      reportTasks.forEach(task => {
+        if (task.subtasks && task.subtasks.length > 0) {
+          task.subtasks.forEach(subtask => {
+            const project = projects.find(p => p._id === task.projectId);
+            const epic = epics.find(e => e._id === task.epicId);
+            
+            combinedTaskData.push({
+              'Task Type': 'Subtask',
+              'Task/Subtask ID': `SUB-${subtask._id.substring(0, 8)}`,
+              'Parent Task ID': task.issueKey,
+              'Title': subtask.title,
+              'Description': `Subtask of: ${task.summary}`,
+              'Status': subtask.status,
+              'Priority': task.priority, // Inherit from parent
+              'Progress %': subtask.progressPercentage,
+              'Story Points': 0, // Subtasks typically don't have story points
+              'Assignees': subtask.assigneeName,
+              'Reporters': getReporterNames(task).join(', '),
+              'Project': project?.name || 'Unknown',
+              'Project Key': project?.key || 'N/A',
+              'Epic': epic?.name || 'No Epic',
+              'Epic ID': epic?.epicId || 'N/A',
+              'Created Date': formatDateForExcel(subtask.createdAt),
+              'Updated Date': formatDateForExcel(subtask.updatedAt),
+              'Due Date': '', // Subtasks typically don't have due dates
+              'Has Subtasks': 'No',
+              'Completion Status': subtask.status === 'Done' ? 'Complete' : 
+                                  subtask.status === 'In Progress' ? 'In Progress' : 'Not Started',
+              'Is Blocked': subtask.status === 'Blocked' ? 'Yes' : 'No',
+              'Health Status': getSubtaskHealthStatus(subtask.status, subtask.progressPercentage)
             });
           });
         }
@@ -714,23 +875,35 @@ export default function ProjectViewPage() {
 
         const completedTasks = assigneeTasks.filter(t => t.status === "Done").length;
         const inProgressTasks = assigneeTasks.filter(t => t.status === "In Progress").length;
+        const blockedTasks = assigneeTasks.filter(t => t.status === "Blocked").length;
         const totalStoryPoints = assigneeTasks.reduce((sum, t) => sum + t.storyPoints, 0);
+        const averageProgress = assigneeTasks.length > 0
+          ? Math.round(assigneeTasks.reduce((sum, t) => sum + calculateTaskProgress(t), 0) / assigneeTasks.length)
+          : 0;
 
         assigneeSummaryData.push({
           'Assignee Name': assignee.name,
           'Assignee Email': assignee.email || '',
-          'Total Tasks Assigned': assigneeTasks.length,
-          'Completed Tasks': completedTasks,
-          'In Progress Tasks': inProgressTasks,
-          'Completion Rate': assigneeTasks.length > 0 
+          'Main Tasks Assigned': assigneeTasks.length,
+          'Subtasks Assigned': assigneeSubtasks.length,
+          'Total Tasks': assigneeTasks.length + assigneeSubtasks.length,
+          'Completed Main Tasks': completedTasks,
+          'Completed Subtasks': assigneeSubtasks.filter(s => s.status === "Done").length,
+          'In Progress Main Tasks': inProgressTasks,
+          'Blocked Main Tasks': blockedTasks,
+          'Blocked Subtasks': assigneeSubtasks.filter(s => s.status === "Blocked").length,
+          'Main Task Completion Rate': assigneeTasks.length > 0 
             ? Math.round((completedTasks / assigneeTasks.length) * 100) + '%'
             : '0%',
+          'Subtask Completion Rate': assigneeSubtasks.length > 0
+            ? Math.round((assigneeSubtasks.filter(s => s.status === "Done").length / assigneeSubtasks.length) * 100) + '%'
+            : 'N/A',
           'Total Story Points': totalStoryPoints,
-          'Average Progress': assigneeTasks.length > 0
-            ? Math.round(assigneeTasks.reduce((sum, t) => sum + calculateTaskProgress(t), 0) / assigneeTasks.length) + '%'
-            : '0%',
-          'Subtasks Assigned': assigneeSubtasks.length,
-          'Completed Subtasks': assigneeSubtasks.filter(s => s.status === "Done").length
+          'Average Main Task Progress': averageProgress + '%',
+          'Average Subtask Progress': assigneeSubtasks.length > 0
+            ? Math.round(assigneeSubtasks.reduce((sum, s) => sum + (s.progressPercentage || 0), 0) / assigneeSubtasks.length) + '%'
+            : 'N/A',
+          'Efficiency Score': calculateEfficiencyScore(assigneeTasks, assigneeSubtasks) + '/10'
         });
       });
     }
@@ -753,36 +926,121 @@ export default function ProjectViewPage() {
 
       const completedTasks = projectTasks.filter(t => t.status === "Done").length;
       const inProgressTasks = projectTasks.filter(t => t.status === "In Progress").length;
+      const blockedTasks = projectTasks.filter(t => t.status === "Blocked").length;
       const totalStoryPoints = projectTasks.reduce((sum, t) => sum + t.storyPoints, 0);
       const averageProgress = projectTasks.length > 0
         ? Math.round(projectTasks.reduce((sum, t) => sum + calculateTaskProgress(t), 0) / projectTasks.length)
         : 0;
 
+      // Count subtasks
+      let totalSubtasks = 0;
+      let completedSubtasks = 0;
+      let blockedSubtasks = 0;
+      
+      if (reportIncludeSubtasks) {
+        projectTasks.forEach(task => {
+          if (task.subtasks) {
+            totalSubtasks += task.subtasks.length;
+            completedSubtasks += task.subtasks.filter(s => s.status === "Done").length;
+            blockedSubtasks += task.subtasks.filter(s => s.status === "Blocked").length;
+          }
+        });
+      }
+
       projectSummaryData.push({
         'Project Name': project.name,
         'Project Key': project.key,
-        'Total Tasks': projectTasks.length,
-        'Completed Tasks': completedTasks,
-        'In Progress Tasks': inProgressTasks,
-        'Completion Rate': projectTasks.length > 0 
+        'Total Main Tasks': projectTasks.length,
+        'Total Subtasks': totalSubtasks,
+        'Combined Total': projectTasks.length + totalSubtasks,
+        'Completed Main Tasks': completedTasks,
+        'Completed Subtasks': completedSubtasks,
+        'In Progress Main Tasks': inProgressTasks,
+        'Blocked Main Tasks': blockedTasks,
+        'Blocked Subtasks': blockedSubtasks,
+        'Main Task Completion Rate': projectTasks.length > 0 
           ? Math.round((completedTasks / projectTasks.length) * 100) + '%'
           : '0%',
+        'Subtask Completion Rate': totalSubtasks > 0
+          ? Math.round((completedSubtasks / totalSubtasks) * 100) + '%'
+          : 'N/A',
         'Total Story Points': totalStoryPoints,
-        'Average Progress': averageProgress + '%',
+        'Average Main Task Progress': averageProgress + '%',
         'Project Start Date': formatDateForExcel(project.createdAt),
-        'Description': project.description || ''
+        'Description': project.description || '',
+        'Health Status': averageProgress >= 80 ? 'Excellent' : 
+                         averageProgress >= 60 ? 'Good' : 
+                         averageProgress >= 40 ? 'Fair' : 
+                         averageProgress >= 20 ? 'Poor' : 'Critical'
       });
     });
 
     return { 
       tasks: tasksData, 
       subtasks: subtasksData, 
+      combinedTasks: combinedTaskData,
       assigneeSummary: assigneeSummaryData,
       projectSummary: projectSummaryData
     };
   };
 
-  // Format date for Excel
+  // Helper function to calculate efficiency score
+  const calculateEfficiencyScore = (tasks: TaskWithSubtasks[], subtasks: Subtask[]) => {
+    const completedTasks = tasks.filter(t => t.status === "Done").length;
+    const inProgressTasks = tasks.filter(t => t.status === "In Progress").length;
+    const blockedTasks = tasks.filter(t => t.status === "Blocked").length;
+    
+    const completedSubtasks = subtasks.filter(s => s.status === "Done").length;
+    const blockedSubtasks = subtasks.filter(s => s.status === "Blocked").length;
+    
+    const totalTasks = tasks.length + subtasks.length;
+    if (totalTasks === 0) return 0;
+    
+    const taskProgress = tasks.length > 0
+      ? Math.round(tasks.reduce((sum, t) => sum + calculateTaskProgress(t), 0) / tasks.length)
+      : 0;
+    
+    const subtaskProgress = subtasks.length > 0
+      ? Math.round(subtasks.reduce((sum, s) => sum + (s.progressPercentage || 0), 0) / subtasks.length)
+      : 0;
+    
+    // Calculate score based on multiple factors
+    let score = 0;
+    score += (completedTasks * 1.5);
+    score += (completedSubtasks * 1);
+    score += (inProgressTasks * 0.8);
+    score += (taskProgress / 10);
+    score += (subtaskProgress / 15);
+    score -= (blockedTasks * 0.5);
+    score -= (blockedSubtasks * 0.3);
+    
+    // Normalize to 10-point scale
+    const normalizedScore = Math.round((score / Math.max(1, totalTasks)) * 2);
+    return Math.min(10, Math.max(0, normalizedScore));
+  };
+
+  // Helper function to get task health status
+  const getTaskHealthStatus = (status: string, progress: number) => {
+    if (status === 'Done') return 'Excellent';
+    if (status === 'Blocked') return 'Critical';
+    if (progress >= 80) return 'Good';
+    if (progress >= 50) return 'Fair';
+    if (progress >= 20) return 'Poor';
+    return 'Critical';
+  };
+
+  // Helper function to get subtask health status
+  const getSubtaskHealthStatus = (status: string, progress: number) => {
+    if (status === 'Done') return 'Excellent';
+    if (status === 'Blocked') return 'Critical';
+    if (status === 'In Progress' && progress >= 70) return 'Good';
+    if (status === 'In Progress' && progress >= 40) return 'Fair';
+    if (status === 'In Progress') return 'Poor';
+    if (status === 'Todo' && progress > 0) return 'Fair';
+    return 'Poor';
+  };
+
+  // Format date for Excel/PDF
   const formatDateForExcel = (dateString: string) => {
     if (!dateString) return '';
     try {
@@ -796,14 +1054,66 @@ export default function ProjectViewPage() {
     }
   };
 
+  // Format date for display
+  const formatDateForDisplay = (dateString: string) => {
+    if (!dateString) return '';
+    try {
+      return new Date(dateString).toLocaleDateString('en-US', {
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric'
+      });
+    } catch {
+      return dateString;
+    }
+  };
+
   // Export to Excel
   const exportToExcel = async () => {
     setReportExporting(true);
     try {
-      const { tasks: tasksData, subtasks: subtasksData, assigneeSummary: assigneeSummaryData, projectSummary: projectSummaryData } = generateReportData();
+      const { 
+        tasks: tasksData, 
+        subtasks: subtasksData, 
+        combinedTasks: combinedTaskData,
+        assigneeSummary: assigneeSummaryData, 
+        projectSummary: projectSummaryData 
+      } = generateReportData();
       
       // Create workbook
       const wb = XLSX.utils.book_new();
+      
+      // Create Combined Tasks Sheet (Main Tasks + Subtasks)
+      if (combinedTaskData.length > 0) {
+        const wsCombined = XLSX.utils.json_to_sheet(combinedTaskData);
+        XLSX.utils.book_append_sheet(wb, wsCombined, 'All Tasks');
+        
+        // Auto-size columns for Combined sheet
+        wsCombined['!cols'] = [
+          { wch: 10 }, // Task Type
+          { wch: 15 }, // Task/Subtask ID
+          { wch: 12 }, // Parent Task ID
+          { wch: 40 }, // Title
+          { wch: 50 }, // Description
+          { wch: 12 }, // Status
+          { wch: 10 }, // Priority
+          { wch: 12 }, // Progress %
+          { wch: 12 }, // Story Points
+          { wch: 25 }, // Assignees
+          { wch: 25 }, // Reporters
+          { wch: 25 }, // Project
+          { wch: 15 }, // Project Key
+          { wch: 25 }, // Epic
+          { wch: 15 }, // Epic ID
+          { wch: 15 }, // Created Date
+          { wch: 15 }, // Updated Date
+          { wch: 15 }, // Due Date
+          { wch: 12 }, // Has Subtasks
+          { wch: 15 }, // Completion Status
+          { wch: 10 }, // Is Blocked
+          { wch: 12 }  // Health Status
+        ];
+      }
       
       // Create Project Summary sheet
       if (projectSummaryData.length > 0) {
@@ -814,34 +1124,40 @@ export default function ProjectViewPage() {
         wsProjectSummary['!cols'] = [
           { wch: 25 }, { wch: 15 }, { wch: 12 }, { wch: 12 },
           { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 12 },
-          { wch: 15 }, { wch: 40 }
+          { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 12 },
+          { wch: 12 }, { wch: 12 }, { wch: 15 }, { wch: 15 },
+          { wch: 40 }, { wch: 15 }
         ];
       }
       
-      // Create Tasks sheet
+      // Create Main Tasks sheet (separate)
       if (tasksData.length > 0) {
         const wsTasks = XLSX.utils.json_to_sheet(tasksData);
-        XLSX.utils.book_append_sheet(wb, wsTasks, 'Tasks');
+        XLSX.utils.book_append_sheet(wb, wsTasks, 'Main Tasks Only');
         
         // Auto-size columns for Tasks sheet
         wsTasks['!cols'] = [
-          { wch: 12 }, { wch: 10 }, { wch: 40 }, { wch: 30 },
-          { wch: 12 }, { wch: 10 }, { wch: 10 }, { wch: 10 },
-          { wch: 25 }, { wch: 20 }, { wch: 25 }, { wch: 25 },
-          { wch: 15 }, { wch: 12 }, { wch: 20 }, { wch: 10 },
-          { wch: 15 }, { wch: 15 }, { wch: 15 }
+          { wch: 10 }, { wch: 12 }, { wch: 10 }, { wch: 40 },
+          { wch: 30 }, { wch: 12 }, { wch: 10 }, { wch: 10 },
+          { wch: 10 }, { wch: 25 }, { wch: 20 }, { wch: 25 },
+          { wch: 25 }, { wch: 15 }, { wch: 12 }, { wch: 20 },
+          { wch: 10 }, { wch: 15 }, { wch: 15 }, { wch: 15 },
+          { wch: 12 }, { wch: 10 }, { wch: 12 }
         ];
       }
       
       // Create Subtasks sheet if needed
       if (reportIncludeSubtasks && subtasksData.length > 0) {
         const wsSubtasks = XLSX.utils.json_to_sheet(subtasksData);
-        XLSX.utils.book_append_sheet(wb, wsSubtasks, 'Subtasks');
+        XLSX.utils.book_append_sheet(wb, wsSubtasks, 'Subtasks Only');
         
         // Auto-size columns for Subtasks sheet
         wsSubtasks['!cols'] = [
-          { wch: 12 }, { wch: 40 }, { wch: 20 }, { wch: 20 },
-          { wch: 12 }, { wch: 10 }, { wch: 15 }, { wch: 15 }
+          { wch: 10 }, { wch: 12 }, { wch: 40 }, { wch: 12 },
+          { wch: 10 }, { wch: 12 }, { wch: 20 }, { wch: 20 },
+          { wch: 12 }, { wch: 10 }, { wch: 15 }, { wch: 15 },
+          { wch: 10 }, { wch: 20 }, { wch: 15 }, { wch: 20 },
+          { wch: 12 }
         ];
       }
       
@@ -854,50 +1170,17 @@ export default function ProjectViewPage() {
         wsAssigneeSummary['!cols'] = [
           { wch: 20 }, { wch: 25 }, { wch: 15 }, { wch: 15 },
           { wch: 15 }, { wch: 15 }, { wch: 15 }, { wch: 15 },
-          { wch: 15 }, { wch: 15 }
+          { wch: 15 }, { wch: 15 }, { wch: 15 }, { wch: 15 },
+          { wch: 15 }, { wch: 15 }, { wch: 15 }, { wch: 15 },
+          { wch: 15 }, { wch: 15 }, { wch: 15 }
         ];
       }
       
       // Generate filename
-      const selectedProjectsCount = reportProjectFilter === "all" ? projects.length : 1;
-      const selectedAssignees = reportAssigneeFilters.filter(a => a.selected);
-      
-      let filename = 'project_report';
-      
-      if (reportProjectFilter !== "all" && reportProjectFilter !== "") {
-        const project = projects.find(p => p._id === reportProjectFilter);
-        if (project) {
-          filename = `${project.name.replace(/[^a-z0-9]/gi, '_').toLowerCase()}_report`;
-        }
-      } else if (selectedProjectsCount === 1 && projects.length > 0) {
-        filename = `${projects[0].name.replace(/[^a-z0-9]/gi, '_').toLowerCase()}_report`;
-      } else {
-        filename = `${selectedProjectsCount}_projects_report`;
-      }
-      
-      // Add assignee info to filename if selected
-      if (selectedAssignees.length > 0) {
-        if (selectedAssignees.length <= 3) {
-          filename += `_${selectedAssignees.map(a => a.name.split(' ')[0]).join('_')}`;
-        } else {
-          filename += `_${selectedAssignees.length}_assignees`;
-        }
-      }
-      
-      // Add date range to filename
-      if (reportDateRange.type !== 'allTime') {
-        const dateRange = reportDateRange.type === 'custom' 
-          ? `${formatDateForExcel(reportDateRange.startDate?.toString() || '')}_to_${formatDateForExcel(reportDateRange.endDate?.toString() || '')}`
-          : reportDateRange.type;
-        filename += `_${dateRange}`;
-      } else {
-        filename += '_all_time';
-      }
-      
-      filename += `_${new Date().toISOString().split('T')[0]}.xlsx`;
+      const filename = generateFilename();
       
       // Export
-      XLSX.writeFile(wb, filename);
+      XLSX.writeFile(wb, `${filename}.xlsx`);
       
       // Close panel after export
       setShowReportPanel(false);
@@ -907,6 +1190,444 @@ export default function ProjectViewPage() {
       alert('Failed to export report. Please try again.');
     } finally {
       setReportExporting(false);
+    }
+  };
+
+  // Generate PDF Report with proper alignment
+  const generatePDFReport = async () => {
+    setReportExportingPDF(true);
+    try {
+      const reportTasks = getReportTasks;
+      const { 
+        combinedTasks: combinedTaskData,
+        assigneeSummary: assigneeSummaryData, 
+        projectSummary: projectSummaryData 
+      } = generateReportData();
+      
+      // Create new PDF document
+      const doc = new jsPDF('landscape');
+      const pageWidth = doc.internal.pageSize.getWidth();
+      const pageHeight = doc.internal.pageSize.getHeight();
+      const margin = 15;
+      let yPos = margin;
+      
+      // Helper function to add new page
+      const addNewPage = () => {
+        doc.addPage('landscape');
+        yPos = margin;
+      };
+      
+      // Helper function to check if we need new page
+      const checkPageHeight = (additionalHeight: number) => {
+        if (yPos + additionalHeight > pageHeight - margin) {
+          addNewPage();
+          return true;
+        }
+        return false;
+      };
+      
+      // Add Report Header
+      doc.setFontSize(20);
+      doc.setFont('helvetica', 'bold');
+      doc.text('Project Progress Report', pageWidth / 2, yPos, { align: 'center' });
+      yPos += 10;
+      
+      // Add Report Metadata
+      doc.setFontSize(10);
+      doc.setFont('helvetica', 'normal');
+      
+      // Report filters information
+      let filtersText = 'Report Filters: ';
+      const filterDetails: string[] = [];
+      
+      // Project filter
+      if (reportProjectFilter === "all") {
+        filterDetails.push(`All Projects (${projects.length})`);
+      } else {
+        const project = projects.find(p => p._id === reportProjectFilter);
+        if (project) {
+          filterDetails.push(`Project: ${project.name}`);
+        }
+      }
+      
+      // Date range filter
+      if (reportDateRange.type !== 'allTime') {
+        if (reportDateRange.startDate && reportDateRange.endDate) {
+          filterDetails.push(`Date Range: ${formatDateForDisplay(reportDateRange.startDate.toString())} to ${formatDateForDisplay(reportDateRange.endDate.toString())}`);
+        } else {
+          filterDetails.push(`Date Range: ${reportDateRange.type.replace(/([A-Z])/g, ' $1').replace(/^./, str => str.toUpperCase())}`);
+        }
+      }
+      
+      // Assignee filter
+      const selectedAssignees = reportAssigneeFilters.filter(a => a.selected);
+      if (selectedAssignees.length > 0) {
+        if (selectedAssignees.length <= 3) {
+          filterDetails.push(`Assignees: ${selectedAssignees.map(a => a.name).join(', ')}`);
+        } else {
+          filterDetails.push(`Assignees: ${selectedAssignees.length} selected`);
+        }
+      }
+      
+      // Subtask filter
+      if (!reportIncludeSubtasks) {
+        filterDetails.push('Subtasks: Excluded');
+      }
+      
+      filtersText += filterDetails.join(' | ');
+      
+      // Wrap text for filters
+      const splitFilters = doc.splitTextToSize(filtersText, pageWidth - 2 * margin);
+      doc.text(splitFilters, margin, yPos);
+      yPos += splitFilters.length * 5 + 5;
+      
+      // Add generation date
+      doc.text(`Generated: ${new Date().toLocaleDateString('en-US', { 
+        year: 'numeric', 
+        month: 'long', 
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
+      })}`, margin, yPos);
+      yPos += 10;
+      
+      // Add Statistics Summary
+      checkPageHeight(30);
+      doc.setFontSize(14);
+      doc.setFont('helvetica', 'bold');
+      doc.text('Statistics Summary', margin, yPos);
+      yPos += 10;
+      
+      doc.setFontSize(10);
+      doc.setFont('helvetica', 'normal');
+      
+      // Calculate statistics
+      const totalTasks = reportStats.totalTasks;
+      const completedTasks = reportStats.completedTasks;
+      const inProgressTasks = reportStats.inProgressTasks;
+      const blockedTasks = reportStats.blockedTasks;
+      const averageProgress = reportStats.averageProgress;
+      const totalSubtasks = reportStats.totalSubtasks;
+      const completedSubtasks = reportStats.completedSubtasks;
+      const blockedSubtasks = reportStats.blockedSubtasks;
+      
+      // Create statistics table
+      const statsData = [
+        ['Metric', 'Main Tasks', 'Subtasks', 'Total/Combined'],
+        ['Total Items', totalTasks.toString(), totalSubtasks.toString(), (totalTasks + totalSubtasks).toString()],
+        ['Completed', completedTasks.toString(), completedSubtasks.toString(), (completedTasks + completedSubtasks).toString()],
+        ['In Progress', inProgressTasks.toString(), reportStats.inProgressSubtasks.toString(), (inProgressTasks + reportStats.inProgressSubtasks).toString()],
+        ['Blocked', blockedTasks.toString(), blockedSubtasks.toString(), (blockedTasks + blockedSubtasks).toString()],
+        ['Completion Rate', `${reportStats.completionRate}%`, totalSubtasks > 0 ? `${Math.round((completedSubtasks / totalSubtasks) * 100)}%` : 'N/A', 'N/A'],
+        ['Average Progress', `${averageProgress}%`, totalSubtasks > 0 ? `${Math.round(reportStats.inProgressSubtasks > 0 ? 65 : 0)}%` : 'N/A', 'N/A'],
+        ['Total Story Points', reportStats.totalStoryPoints.toString(), 'N/A', reportStats.totalStoryPoints.toString()]
+      ];
+      
+      autoTable(doc, {
+        startY: yPos,
+        head: [statsData[0]],
+        body: statsData.slice(1),
+        margin: { left: margin, right: margin },
+        styles: { fontSize: 9, cellPadding: 3 },
+        headStyles: { fillColor: [63, 168, 125], textColor: 255, fontStyle: 'bold' },
+        alternateRowStyles: { fillColor: [245, 245, 245] },
+        columnStyles: {
+          0: { fontStyle: 'bold' },
+          1: { cellWidth: 60 },
+          2: { cellWidth: 60 },
+          3: { cellWidth: 70 }
+        }
+      });
+      
+      // Update yPos safely
+      const autoTableApi = doc as any;
+      if (autoTableApi.lastAutoTable && autoTableApi.lastAutoTable.finalY) {
+        yPos = autoTableApi.lastAutoTable.finalY + 10;
+      } else {
+        yPos += 50; // Default fallback
+      }
+      
+      // Add Project Summary
+      if (projectSummaryData.length > 0) {
+        checkPageHeight(50);
+        doc.setFontSize(14);
+        doc.setFont('helvetica', 'bold');
+        doc.text('Project Summary', margin, yPos);
+        yPos += 10;
+        
+        // Prepare project summary data for table
+        const projectTableData = projectSummaryData.map(project => [
+          project['Project Name'],
+          project['Project Key'],
+          project['Total Main Tasks'],
+          project['Total Subtasks'],
+          project['Completed Main Tasks'],
+          project['Blocked Main Tasks'],
+          project['Average Main Task Progress']
+        ]);
+        
+        autoTable(doc, {
+          startY: yPos,
+          head: [['Project', 'Key', 'Main Tasks', 'Subtasks', 'Completed', 'Blocked', 'Progress']],
+          body: projectTableData,
+          margin: { left: margin, right: margin },
+          styles: { fontSize: 8, cellPadding: 2 },
+          headStyles: { fillColor: [41, 128, 185], textColor: 255, fontStyle: 'bold' },
+          alternateRowStyles: { fillColor: [245, 245, 245] },
+          columnStyles: {
+            0: { cellWidth: 40 },
+            1: { cellWidth: 25 },
+            2: { cellWidth: 25 },
+            3: { cellWidth: 25 },
+            4: { cellWidth: 25 },
+            5: { cellWidth: 25 },
+            6: { cellWidth: 30 }
+          },
+          didDrawPage: function (data: any) {
+            // Add null check for cursor
+            if (data.cursor && data.cursor.y) {
+              yPos = data.cursor.y + 10;
+            }
+          }
+        });
+        
+        // Update yPos safely
+        if (autoTableApi.lastAutoTable && autoTableApi.lastAutoTable.finalY) {
+          yPos = autoTableApi.lastAutoTable.finalY + 10;
+        } else {
+          yPos += 50; // Default fallback
+        }
+      }
+      
+      // Add Assignee Summary
+      if (assigneeSummaryData.length > 0) {
+        checkPageHeight(50);
+        doc.setFontSize(14);
+        doc.setFont('helvetica', 'bold');
+        doc.text('Assignee Performance', margin, yPos);
+        yPos += 10;
+        
+        // Prepare assignee data for table
+        const assigneeTableData = assigneeSummaryData.map(assignee => [
+          assignee['Assignee Name'],
+          assignee['Main Tasks Assigned'],
+          assignee['Subtasks Assigned'],
+          assignee['Completed Main Tasks'],
+          assignee['Blocked Main Tasks'],
+          assignee['Average Main Task Progress'],
+          assignee['Efficiency Score']
+        ]);
+        
+        autoTable(doc, {
+          startY: yPos,
+          head: [['Assignee', 'Main Tasks', 'Subtasks', 'Completed', 'Blocked', 'Progress', 'Efficiency']],
+          body: assigneeTableData,
+          margin: { left: margin, right: margin },
+          styles: { fontSize: 8, cellPadding: 2 },
+          headStyles: { fillColor: [155, 89, 182], textColor: 255, fontStyle: 'bold' },
+          alternateRowStyles: { fillColor: [245, 245, 245] },
+          columnStyles: {
+            0: { cellWidth: 35 },
+            1: { cellWidth: 25 },
+            2: { cellWidth: 25 },
+            3: { cellWidth: 25 },
+            4: { cellWidth: 25 },
+            5: { cellWidth: 25 },
+            6: { cellWidth: 25 }
+          }
+        });
+        
+        // Update yPos safely
+        if (autoTableApi.lastAutoTable && autoTableApi.lastAutoTable.finalY) {
+          yPos = autoTableApi.lastAutoTable.finalY + 10;
+        } else {
+          yPos += 50; // Default fallback
+        }
+      }
+      
+      // Add Tasks and Subtasks Details
+      if (combinedTaskData.length > 0) {
+        checkPageHeight(30);
+        doc.setFontSize(14);
+        doc.setFont('helvetica', 'bold');
+        doc.text('Tasks and Subtasks Details', margin, yPos);
+        yPos += 10;
+        
+        // Group tasks by type for better organization
+        const mainTasks = combinedTaskData.filter(item => item['Task Type'] === 'Main Task');
+        const subtasks = combinedTaskData.filter(item => item['Task Type'] === 'Subtask');
+        
+        // Add Main Tasks section
+        if (mainTasks.length > 0) {
+          checkPageHeight(20);
+          doc.setFontSize(12);
+          doc.setFont('helvetica', 'bold');
+          doc.text('Main Tasks', margin, yPos);
+          yPos += 7;
+          
+          // Prepare main tasks data for table (simplified for PDF)
+          const mainTasksTableData = mainTasks.map(task => [
+            task['Task/Subtask ID'],
+            task['Title'].substring(0, 40) + (task['Title'].length > 40 ? '...' : ''),
+            task['Status'],
+            task['Priority'],
+            task['Progress %'] + '%',
+            task['Assignees'],
+            task['Project']
+          ]);
+          
+          autoTable(doc, {
+            startY: yPos,
+            head: [['ID', 'Title', 'Status', 'Priority', 'Progress', 'Assignees', 'Project']],
+            body: mainTasksTableData,
+            margin: { left: margin, right: margin },
+            styles: { fontSize: 7, cellPadding: 1 },
+            headStyles: { fillColor: [52, 152, 219], textColor: 255, fontStyle: 'bold' },
+            alternateRowStyles: { fillColor: [245, 245, 245] },
+            columnStyles: {
+              0: { cellWidth: 25 },
+              1: { cellWidth: 50 },
+              2: { cellWidth: 20 },
+              3: { cellWidth: 20 },
+              4: { cellWidth: 20 },
+              5: { cellWidth: 35 },
+              6: { cellWidth: 30 }
+            },
+            pageBreak: 'auto',
+            didDrawPage: function (data: any) {
+              // Add null check for cursor
+              if (data.cursor && data.cursor.y) {
+                yPos = data.cursor.y + 10;
+              }
+            }
+          });
+          
+          // Update yPos safely
+          if (autoTableApi.lastAutoTable && autoTableApi.lastAutoTable.finalY) {
+            yPos = autoTableApi.lastAutoTable.finalY + 10;
+          } else {
+            yPos += 50; // Default fallback
+          }
+        }
+        
+        // Add Subtasks section if included
+        if (reportIncludeSubtasks && subtasks.length > 0) {
+          checkPageHeight(20);
+          doc.setFontSize(12);
+          doc.setFont('helvetica', 'bold');
+          doc.text('Subtasks', margin, yPos);
+          yPos += 7;
+          
+          // Prepare subtasks data for table (simplified for PDF)
+          const subtasksTableData = subtasks.map(subtask => [
+            subtask['Parent Task ID'],
+            subtask['Title'].substring(0, 40) + (subtask['Title'].length > 40 ? '...' : ''),
+            subtask['Status'],
+            subtask['Progress %'] + '%',
+            subtask['Assignees'],
+            subtask['Project']
+          ]);
+          
+          autoTable(doc, {
+            startY: yPos,
+            head: [['Parent Task', 'Title', 'Status', 'Progress', 'Assignee', 'Project']],
+            body: subtasksTableData,
+            margin: { left: margin, right: margin },
+            styles: { fontSize: 7, cellPadding: 1 },
+            headStyles: { fillColor: [155, 89, 182], textColor: 255, fontStyle: 'bold' },
+            alternateRowStyles: { fillColor: [245, 245, 245] },
+            columnStyles: {
+              0: { cellWidth: 30 },
+              1: { cellWidth: 50 },
+              2: { cellWidth: 25 },
+              3: { cellWidth: 20 },
+              4: { cellWidth: 30 },
+              5: { cellWidth: 30 }
+            }
+          });
+        }
+      }
+      
+      // Add footer with page numbers
+      const totalPages = doc.getNumberOfPages();
+      for (let i = 1; i <= totalPages; i++) {
+        doc.setPage(i);
+        doc.setFontSize(8);
+        doc.setFont('helvetica', 'normal');
+        doc.text(`Page ${i} of ${totalPages}`, pageWidth - margin, pageHeight - 10);
+        doc.text('Project Management System Report', margin, pageHeight - 10);
+      }
+      
+      // Generate filename and save
+      const filename = generateFilename();
+      doc.save(`${filename}.pdf`);
+      
+      // Close panel after export
+      setShowReportPanel(false);
+      
+    } catch (error) {
+      console.error('Error generating PDF:', error);
+      alert('Failed to generate PDF report. Please try again.');
+    } finally {
+      setReportExportingPDF(false);
+    }
+  };
+
+  // Generate filename based on filters
+  const generateFilename = () => {
+    const selectedProjectsCount = reportProjectFilter === "all" ? projects.length : 1;
+    const selectedAssignees = reportAssigneeFilters.filter(a => a.selected);
+    
+    let filename = 'project_report';
+    
+    if (reportProjectFilter !== "all" && reportProjectFilter !== "") {
+      const project = projects.find(p => p._id === reportProjectFilter);
+      if (project) {
+        filename = `${project.name.replace(/[^a-z0-9]/gi, '_').toLowerCase()}_report`;
+      }
+    } else if (selectedProjectsCount === 1 && projects.length > 0) {
+      filename = `${projects[0].name.replace(/[^a-z0-9]/gi, '_').toLowerCase()}_report`;
+    } else {
+      filename = `${selectedProjectsCount}_projects_report`;
+    }
+    
+    // Add assignee info to filename if selected
+    if (selectedAssignees.length > 0) {
+      if (selectedAssignees.length <= 3) {
+        filename += `_${selectedAssignees.map(a => a.name.split(' ')[0]).join('_')}`;
+      } else {
+        filename += `_${selectedAssignees.length}_assignees`;
+      }
+    }
+    
+    // Add task type info
+    if (reportIncludeSubtasks) {
+      filename += '_with_subtasks';
+    } else {
+      filename += '_main_tasks_only';
+    }
+    
+    // Add date range to filename
+    if (reportDateRange.type !== 'allTime') {
+      const dateRange = reportDateRange.type === 'custom' 
+        ? `${formatDateForExcel(reportDateRange.startDate?.toString() || '')}_to_${formatDateForExcel(reportDateRange.endDate?.toString() || '')}`
+        : reportDateRange.type;
+      filename += `_${dateRange}`;
+    } else {
+      filename += '_all_time';
+    }
+    
+    filename += `_${new Date().toISOString().split('T')[0]}`;
+    
+    return filename;
+  };
+
+  // Handle export based on report type
+  const handleExport = async () => {
+    if (reportType === 'excel') {
+      await exportToExcel();
+    } else {
+      await generatePDFReport();
     }
   };
 
@@ -935,55 +1656,56 @@ export default function ProjectViewPage() {
   // Get status color
   const getStatusColor = (status: string) => {
     switch(status) {
-      case "Done": return "bg-green-100 text-green-800";
-      case "In Progress": return "bg-blue-100 text-blue-800";
-      case "Review": return "bg-purple-100 text-purple-800";
-      case "Todo": return "bg-yellow-100 text-yellow-800";
-      case "Backlog": return "bg-gray-100 text-gray-800";
-      case "Blocked": return "bg-red-100 text-red-800";
-      default: return "bg-gray-100 text-gray-800";
+      case "Done": return "bg-green-100 border border-green-200";
+      case "In Progress": return "bg-blue-100 border border-blue-200";
+      case "Review": return "bg-purple-100 border border-purple-200";
+      case "Todo": return "bg-yellow-100 border border-yellow-200";
+      case "Backlog": return "bg-gray-100 border border-gray-200";
+      case "Blocked": return "bg-red-100 border border-red-200";
+      default: return "bg-gray-100 border border-gray-200";
     }
   };
 
   // Get priority color
   const getPriorityColor = (priority: string) => {
     switch(priority) {
-      case "Highest": return "bg-red-100 text-red-800";
-      case "High": return "bg-orange-100 text-orange-800";
-      case "Medium": return "bg-yellow-100 text-yellow-800";
-      case "Low": return "bg-green-100 text-green-800";
-      case "Lowest": return "bg-blue-100 text-blue-800";
-      default: return "bg-gray-100 text-gray-800";
+      case "Highest": return "bg-red-100 border border-red-200";
+      case "High": return "bg-orange-100 border border-orange-200";
+      case "Medium": return "bg-yellow-100 border border-yellow-200";
+      case "Low": return "bg-green-100 border border-green-200";
+      case "Lowest": return "bg-blue-100 border border-blue-200";
+      default: return "bg-gray-100 border border-gray-200";
     }
   };
 
   // Get subtask status color
   const getSubtaskStatusColor = (status: string) => {
     switch(status) {
-      case "Done": return "bg-green-100 text-green-800";
-      case "In Progress": return "bg-blue-100 text-blue-800";
-      case "Todo": return "bg-yellow-100 text-yellow-800";
-      default: return "bg-gray-100 text-gray-800";
+      case "Done": return "bg-green-100 border border-green-200";
+      case "In Progress": return "bg-blue-100 border border-blue-200";
+      case "Blocked": return "bg-red-100 border border-red-200";
+      case "Todo": return "bg-yellow-100 border border-yellow-200";
+      default: return "bg-gray-100 border border-gray-200";
     }
   };
 
   // Get issue type color
   const getIssueTypeColor = (issueType: string) => {
     switch(issueType) {
-      case "Story": return "bg-blue-100 text-blue-800";
-      case "Task": return "bg-green-100 text-green-800";
-      case "Bug": return "bg-red-100 text-red-800";
-      default: return "bg-gray-100 text-gray-800";
+      case "Story": return "bg-blue-100 border border-blue-200";
+      case "Task": return "bg-green-100 border border-green-200";
+      case "Bug": return "bg-red-100 border border-red-200";
+      default: return "bg-gray-100 border border-gray-200";
     }
   };
 
   // Get issue type icon
   const getIssueTypeIcon = (issueType: string) => {
     switch(issueType) {
-      case "Story": return <BookOpen size={12} />;
-      case "Task": return <ClipboardCheck size={12} />;
-      case "Bug": return <Bug size={12} />;
-      default: return <ClipboardCheck size={12} />;
+      case "Story": return <BookOpen size={12} className="text-blue-600" />;
+      case "Task": return <ClipboardCheck size={12} className="text-green-600" />;
+      case "Bug": return <Bug size={12} className="text-red-600" />;
+      default: return <ClipboardCheck size={12} className="text-gray-600" />;
     }
   };
 
@@ -1015,17 +1737,27 @@ export default function ProjectViewPage() {
     const totalTasks = reportTasks.length;
     const completedTasks = reportTasks.filter(task => task.status === "Done").length;
     const inProgressTasks = reportTasks.filter(task => task.status === "In Progress").length;
+    const blockedTasks = reportTasks.filter(task => task.status === "Blocked").length;
     const totalStoryPoints = reportTasks.reduce((sum, task) => sum + task.storyPoints, 0);
+    const averageProgress = reportTasks.length > 0 
+      ? Math.round(reportTasks.reduce((sum, task) => sum + calculateTaskProgress(task), 0) / reportTasks.length)
+      : 0;
     
     // Count subtasks
     let totalSubtasks = 0;
     let completedSubtasks = 0;
+    let inProgressSubtasks = 0;
+    let blockedSubtasks = 0;
+    let todoSubtasks = 0;
     
     if (reportIncludeSubtasks) {
       reportTasks.forEach(task => {
         if (task.subtasks) {
           totalSubtasks += task.subtasks.length;
           completedSubtasks += task.subtasks.filter(s => s.status === "Done").length;
+          inProgressSubtasks += task.subtasks.filter(s => s.status === "In Progress").length;
+          blockedSubtasks += task.subtasks.filter(s => s.status === "Blocked").length;
+          todoSubtasks += task.subtasks.filter(s => s.status === "Todo").length;
         }
       });
     }
@@ -1036,10 +1768,30 @@ export default function ProjectViewPage() {
       const assigneeTasks = reportTasks.filter(task => 
         getAssigneeIds(task).includes(assignee.id)
       );
+      const assigneeSubtasks = reportIncludeSubtasks 
+        ? reportTasks.flatMap(task => 
+            task.subtasks?.filter(s => s.assigneeId === assignee.id) || []
+          )
+        : [];
+      
+      const assigneeProgress = assigneeTasks.length > 0
+        ? Math.round(assigneeTasks.reduce((sum, t) => sum + calculateTaskProgress(t), 0) / assigneeTasks.length)
+        : 0;
+        
+      const subtaskProgress = assigneeSubtasks.length > 0
+        ? Math.round(assigneeSubtasks.reduce((sum, s) => sum + (s.progressPercentage || 0), 0) / assigneeSubtasks.length)
+        : 0;
+        
       return {
         name: assignee.name,
-        taskCount: assigneeTasks.length,
-        completedCount: assigneeTasks.filter(t => t.status === "Done").length
+        mainTaskCount: assigneeTasks.length,
+        subtaskCount: assigneeSubtasks.length,
+        completedMainTasks: assigneeTasks.filter(t => t.status === "Done").length,
+        completedSubtasks: assigneeSubtasks.filter(s => s.status === "Done").length,
+        blockedMainTasks: assigneeTasks.filter(t => t.status === "Blocked").length,
+        blockedSubtasks: assigneeSubtasks.filter(s => s.status === "Blocked").length,
+        mainTaskProgress: assigneeProgress,
+        subtaskProgress: subtaskProgress
       };
     });
 
@@ -1055,10 +1807,34 @@ export default function ProjectViewPage() {
 
     const projectStats = Array.from(projectTasksMap.entries()).map(([projectId, projectTasks]) => {
       const project = projects.find(p => p._id === projectId);
+      const projectProgress = projectTasks.length > 0
+        ? Math.round(projectTasks.reduce((sum, t) => sum + calculateTaskProgress(t), 0) / projectTasks.length)
+        : 0;
+        
+      // Count subtasks for this project
+      let projectSubtasks = 0;
+      let projectCompletedSubtasks = 0;
+      let projectBlockedSubtasks = 0;
+      
+      if (reportIncludeSubtasks) {
+        projectTasks.forEach(task => {
+          if (task.subtasks) {
+            projectSubtasks += task.subtasks.length;
+            projectCompletedSubtasks += task.subtasks.filter(s => s.status === "Done").length;
+            projectBlockedSubtasks += task.subtasks.filter(s => s.status === "Blocked").length;
+          }
+        });
+      }
+        
       return {
         name: project?.name || 'Unknown',
-        taskCount: projectTasks.length,
-        completedCount: projectTasks.filter(t => t.status === "Done").length
+        mainTaskCount: projectTasks.length,
+        subtaskCount: projectSubtasks,
+        completedMainTasks: projectTasks.filter(t => t.status === "Done").length,
+        completedSubtasks: projectCompletedSubtasks,
+        blockedMainTasks: projectTasks.filter(t => t.status === "Blocked").length,
+        blockedSubtasks: projectBlockedSubtasks,
+        progress: projectProgress
       };
     });
 
@@ -1066,10 +1842,15 @@ export default function ProjectViewPage() {
       totalTasks,
       completedTasks,
       inProgressTasks,
+      blockedTasks,
+      averageProgress,
       completionRate: totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0,
       totalStoryPoints,
       totalSubtasks,
       completedSubtasks,
+      inProgressSubtasks,
+      blockedSubtasks,
+      todoSubtasks,
       assigneeStats,
       projectStats,
       selectedAssigneeCount: selectedAssignees.length,
@@ -1079,37 +1860,44 @@ export default function ProjectViewPage() {
 
   if (loading) {
     return (
-      <div className="fixed inset-0 flex items-center justify-center">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-[#3fa87d]"></div>
-        <p className="mt-4 text-slate-600">Loading projects data...</p>
+      <div className="fixed inset-0 flex items-center justify-center bg-gray-50">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-[#3fa87d] mx-auto mb-4"></div>
+          <p className="text-black font-bold">Loading projects data...</p>
+          <p className="text-gray-600 mt-2">Please wait while we fetch your projects</p>
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="fixed inset-0 flex items-center mt-15 justify-center p-4 bg-slate-50">
-      <div className="h-[80vh] w-full max-w-[85%] flex flex-col bg-white rounded-3xl border-2 border-slate-200 shadow-xl overflow-hidden">
+    <div className="fixed inset-0 flex items-center mt-15 justify-center p-4 bg-gray-50">
+      <div className="h-[80vh] w-full max-w-[85%] flex flex-col bg-white rounded-3xl border-2 border-gray-200 shadow-xl overflow-hidden">
         {/* Header */}
-        <div className="shrink-0 p-6 border-b border-slate-100">
+        <div className="shrink-0 p-6 border-b border-gray-100">
           <div className="flex items-center justify-between mb-4">
             <div>
-              <h1 className="text-2xl font-bold text-slate-800">Projects Overview</h1>
-              <p className="text-slate-600 mt-1">View all projects, epics, tasks, and subtasks</p>
+              <h1 className="text-2xl font-bold text-black">Projects Overview</h1>
+              <p className="text-gray-600 mt-1">View all projects, epics, tasks, and subtasks</p>
             </div>
             
             {/* Stats Summary */}
             <div className="flex items-center gap-4">
-              <div className="text-center px-4 py-2 bg-slate-50 rounded-xl">
-                <div className="text-2xl font-bold text-slate-800">{projectStats.totalProjects}</div>
-                <div className="text-xs text-slate-600">Projects</div>
+              <div className="text-center px-4 py-2 bg-gray-100 rounded-xl">
+                <div className="text-2xl font-bold text-black">{projectStats.totalProjects}</div>
+                <div className="text-xs text-gray-600">Projects</div>
               </div>
-              <div className="text-center px-4 py-2 bg-slate-50 rounded-xl">
-                <div className="text-2xl font-bold text-slate-800">{projectStats.totalTasks}</div>
-                <div className="text-xs text-slate-600">Tasks</div>
+              <div className="text-center px-4 py-2 bg-gray-100 rounded-xl">
+                <div className="text-2xl font-bold text-black">{projectStats.totalTasks}</div>
+                <div className="text-xs text-gray-600">Tasks</div>
+              </div>
+              <div className="text-center px-4 py-2 bg-gray-100 rounded-xl">
+                <div className="text-2xl font-bold text-black">{projectStats.totalSubtasks}</div>
+                <div className="text-xs text-gray-600">Subtasks</div>
               </div>
               <div className="text-center px-4 py-2 bg-[#3fa87d]/10 rounded-xl">
                 <div className="text-2xl font-bold text-[#3fa87d]">{projectStats.overallProgress}%</div>
-                <div className="text-xs text-[#3fa87d]">Progress</div>
+                <div className="text-xs text-[#3fa87d]">Overall Progress</div>
               </div>
               
               {/* Report Button */}
@@ -1118,7 +1906,7 @@ export default function ProjectViewPage() {
                 className="flex items-center gap-2 px-4 py-2 bg-[#3fa87d] text-white rounded-xl hover:bg-[#3fa87d]/90 transition-colors"
               >
                 <FileSpreadsheet size={18} />
-                <span>Generate Report</span>
+                <span className="font-bold">Generate Report</span>
               </button>
             </div>
           </div>
@@ -1131,47 +1919,47 @@ export default function ProjectViewPage() {
                 placeholder="Search projects..."
                 value={projectSearch}
                 onChange={(e) => setProjectSearch(e.target.value)}
-                className="w-full pl-10 pr-4 py-2 bg-slate-50 border-2 border-slate-100 rounded-xl text-sm outline-none focus:border-[#3fa87d]"
+                className="w-full pl-10 pr-4 py-2 bg-gray-100 border-2 border-gray-200 rounded-xl text-sm outline-none focus:border-[#3fa87d] placeholder:text-gray-500 text-black"
               />
-              <Hash className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+              <Hash className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" size={16} />
             </div>
             
             <div className="flex items-center gap-2">
               <select
                 value={statusFilter}
                 onChange={(e) => setStatusFilter(e.target.value)}
-                className="px-3 py-2 bg-slate-50 border-2 border-slate-100 rounded-xl text-sm outline-none focus:border-[#3fa87d]"
+                className="px-3 py-2 bg-gray-100 border-2 border-gray-200 rounded-xl text-sm outline-none focus:border-[#3fa87d] text-black"
               >
-                <option value="">All Status</option>
-                <option value="Backlog">Backlog</option>
-                <option value="Todo">Todo</option>
-                <option value="In Progress">In Progress</option>
-                <option value="Review">Review</option>
-                <option value="Done">Done</option>
-                <option value="Blocked">Blocked</option>
+                <option value="" className="text-gray-500">All Status</option>
+                <option value="Backlog" className="text-black">Backlog</option>
+                <option value="Todo" className="text-black">Todo</option>
+                <option value="In Progress" className="text-black">In Progress</option>
+                <option value="Review" className="text-black">Review</option>
+                <option value="Done" className="text-black">Done</option>
+                <option value="Blocked" className="text-black">Blocked</option>
               </select>
               
               <select
                 value={priorityFilter}
                 onChange={(e) => setPriorityFilter(e.target.value)}
-                className="px-3 py-2 bg-slate-50 border-2 border-slate-100 rounded-xl text-sm outline-none focus:border-[#3fa87d]"
+                className="px-3 py-2 bg-gray-100 border-2 border-gray-200 rounded-xl text-sm outline-none focus:border-[#3fa87d] text-black"
               >
-                <option value="">All Priority</option>
-                <option value="Lowest">Lowest</option>
-                <option value="Low">Low</option>
-                <option value="Medium">Medium</option>
-                <option value="High">High</option>
-                <option value="Highest">Highest</option>
+                <option value="" className="text-gray-500">All Priority</option>
+                <option value="Lowest" className="text-black">Lowest</option>
+                <option value="Low" className="text-black">Low</option>
+                <option value="Medium" className="text-black">Medium</option>
+                <option value="High" className="text-black">High</option>
+                <option value="Highest" className="text-black">Highest</option>
               </select>
               
               <select
                 value={assigneeFilter}
                 onChange={(e) => setAssigneeFilter(e.target.value)}
-                className="px-3 py-2 bg-slate-50 border-2 border-slate-100 rounded-xl text-sm outline-none focus:border-[#3fa87d] min-w-[150px]"
+                className="px-3 py-2 bg-gray-100 border-2 border-gray-200 rounded-xl text-sm outline-none focus:border-[#3fa87d] min-w-[150px] text-black"
               >
-                <option value="">All Assignees</option>
+                <option value="" className="text-gray-500">All Assignees</option>
                 {employees.map(employee => (
-                  <option key={employee._id} value={employee._id}>
+                  <option key={employee._id} value={employee._id} className="text-black">
                     {employee.name}
                   </option>
                 ))}
@@ -1184,57 +1972,73 @@ export default function ProjectViewPage() {
         <div className="flex-1 overflow-hidden">
           <div className="h-full flex">
             {/* Left Sidebar - Projects List */}
-            <div className="w-80 border-r border-slate-100 overflow-y-auto">
+            <div className="w-80 border-r border-gray-100 overflow-y-auto">
               <div className="p-4">
-                <h2 className="text-sm font-bold text-slate-800 mb-4">Projects</h2>
+                <h2 className="text-sm font-bold text-black mb-4">Projects</h2>
                 <div className="space-y-2">
-                  {filteredProjects.map(project => (
-                    <div
-                      key={project._id}
-                      className={`p-3 rounded-xl cursor-pointer transition-all ${
-                        selectedProject?._id === project._id
-                          ? 'bg-[#3fa87d]/10 border-2 border-[#3fa87d]'
-                          : 'bg-slate-50 border-2 border-slate-100 hover:border-slate-200'
-                      }`}
-                      onClick={() => {
-                        setSelectedProject(project);
-                        setSelectedEpic(null);
-                      }}
-                    >
-                      <div className="flex items-center justify-between mb-2">
-                        <div className="flex items-center gap-2">
-                          <div className="w-8 h-8 bg-slate-200 rounded-lg flex items-center justify-center">
-                            <FileText size={16} className="text-slate-600" />
+                  {filteredProjects.length === 0 ? (
+                    <div className="p-6 text-center border-2 border-dashed border-gray-200 rounded-xl">
+                      <FileText className="mx-auto text-gray-300 mb-2" size={24} />
+                      <p className="text-gray-500 font-medium">No projects found</p>
+                      <p className="text-gray-400 text-sm">Try a different search term</p>
+                    </div>
+                  ) : (
+                    filteredProjects.map(project => {
+                      const projectProgress = calculateProjectProgress(project);
+                      return (
+                        <div
+                          key={project._id}
+                          className={`p-3 rounded-xl cursor-pointer transition-all ${
+                            selectedProject?._id === project._id
+                              ? 'bg-[#3fa87d]/10 border-2 border-[#3fa87d]'
+                              : 'bg-gray-100 border-2 border-gray-200 hover:border-gray-300'
+                          }`}
+                          onClick={() => {
+                            setSelectedProject(project);
+                            setSelectedEpic(null);
+                          }}
+                        >
+                          <div className="flex items-center justify-between mb-2">
+                            <div className="flex items-center gap-2">
+                              <div className="w-8 h-8 bg-gray-200 rounded-lg flex items-center justify-center">
+                                <FileText size={16} className="text-gray-600" />
+                              </div>
+                              <div>
+                                <h3 className="font-bold text-black">{project.name}</h3>
+                                <div className="flex items-center gap-2 text-xs text-gray-500">
+                                  <span className="font-mono font-bold text-black">{project.key}</span>
+                                  <span>•</span>
+                                  <span className="text-black">{formatDate(project.createdAt)}</span>
+                                </div>
+                              </div>
+                            </div>
+                            <ArrowUpRight size={16} className="text-gray-400" />
                           </div>
-                          <div>
-                            <h3 className="font-bold text-slate-800">{project.name}</h3>
-                            <div className="flex items-center gap-2 text-xs text-slate-500">
-                              <span className="font-mono font-bold">{project.key}</span>
-                              <span>•</span>
-                              <span>{formatDate(project.createdAt)}</span>
+                          
+                          {/* Project Progress */}
+                          <div className="mt-2">
+                            <div className="flex items-center justify-between mb-1">
+                              <span className="text-xs text-gray-600">Progress</span>
+                              <span className="text-xs font-bold text-black">
+                                {projectProgress}%
+                              </span>
+                            </div>
+                            <div className="w-full bg-gray-200 rounded-full h-2">
+                              <div
+                                className={`h-2 rounded-full transition-all ${
+                                  projectProgress === 100 ? 'bg-green-500' :
+                                  projectProgress >= 70 ? 'bg-blue-500' :
+                                  projectProgress >= 40 ? 'bg-yellow-500' :
+                                  'bg-red-500'
+                                }`}
+                                style={{ width: `${Math.min(projectProgress, 100)}%` }}
+                              />
                             </div>
                           </div>
                         </div>
-                        <ArrowUpRight size={16} className="text-slate-400" />
-                      </div>
-                      
-                      {/* Project Progress */}
-                      <div className="mt-2">
-                        <div className="flex items-center justify-between mb-1">
-                          <span className="text-xs text-slate-600">Progress</span>
-                          <span className="text-xs font-bold text-slate-800">
-                            {calculateProjectProgress(project)}%
-                          </span>
-                        </div>
-                        <div className="w-full bg-slate-200 rounded-full h-2">
-                          <div
-                            className="bg-[#3fa87d] h-2 rounded-full transition-all"
-                            style={{ width: `${calculateProjectProgress(project)}%` }}
-                          />
-                        </div>
-                      </div>
-                    </div>
-                  ))}
+                      );
+                    })
+                  )}
                 </div>
               </div>
             </div>
@@ -1244,24 +2048,65 @@ export default function ProjectViewPage() {
               {/* Report Panel Overlay */}
               {showReportPanel && (
                 <div className="absolute inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-                  <div className="bg-white rounded-2xl p-6 w-full max-w-4xl shadow-2xl max-h-[90vh] overflow-y-auto">
-                    <div className="flex items-center justify-between mb-6 sticky top-0 bg-white py-2">
+                  <div className="bg-white rounded-2xl p-6 w-full max-w-4xl shadow-2xl max-h-[70vh] overflow-y-auto">
+                    <div className="flex items-center justify-between mb-6 top-0 bg-white py-2">
                       <div>
-                        <h2 className="text-xl font-bold text-slate-800">Generate Report</h2>
-                        <p className="text-slate-600 mt-1">Export project data to Excel</p>
+                        <h2 className="text-xl font-bold text-black">Generate Report</h2>
+                        <p className="text-gray-600 mt-1">Export project data with proper alignment</p>
                       </div>
                       <button
                         onClick={() => setShowReportPanel(false)}
-                        className="p-2 hover:bg-slate-100 rounded-xl"
+                        className="p-2 hover:bg-gray-100 rounded-xl text-gray-600"
                       >
                         <X size={20} />
                       </button>
                     </div>
                     
                     <div className="space-y-6">
+                      {/* Report Type Selection */}
+                      <div>
+                        <h3 className="text-sm font-bold text-black mb-3 flex items-center gap-2">
+                          <FilePieChart size={16} />
+                          Report Format
+                        </h3>
+                        <div className="flex gap-4">
+                          <label className="flex items-center gap-3 cursor-pointer">
+                            <input
+                              type="radio"
+                              name="reportType"
+                              value="excel"
+                              checked={reportType === 'excel'}
+                              onChange={(e) => setReportType(e.target.value as 'excel' | 'pdf')}
+                              className="w-4 h-4"
+                            />
+                            <div className="p-3 border-2 border-gray-200 rounded-xl hover:border-[#3fa87d] transition-colors">
+                              <FileSpreadsheet size={24} className="text-green-600 mb-2" />
+                              <div className="text-black font-bold">Excel Report</div>
+                              <div className="text-xs text-gray-600">Spreadsheet format with multiple sheets</div>
+                            </div>
+                          </label>
+                          
+                          <label className="flex items-center gap-3 cursor-pointer">
+                            <input
+                              type="radio"
+                              name="reportType"
+                              value="pdf"
+                              checked={reportType === 'pdf'}
+                              onChange={(e) => setReportType(e.target.value as 'excel' | 'pdf')}
+                              className="w-4 h-4"
+                            />
+                            <div className="p-3 border-2 border-gray-200 rounded-xl hover:border-[#3fa87d] transition-colors">
+                              <FileText size={24} className="text-red-600 mb-2" />
+                              <div className="text-black font-bold">PDF Report</div>
+                              <div className="text-xs text-gray-600">Formatted document with proper alignment</div>
+                            </div>
+                          </label>
+                        </div>
+                      </div>
+                      
                       {/* Project Selection */}
                       <div>
-                        <h3 className="text-sm font-bold text-slate-800 mb-3 flex items-center gap-2">
+                        <h3 className="text-sm font-bold text-black mb-3 flex items-center gap-2">
                           <FileText size={16} />
                           Project Selection
                         </h3>
@@ -1274,7 +2119,7 @@ export default function ProjectViewPage() {
                               onChange={() => setReportProjectFilter("all")}
                               className="w-4 h-4"
                             />
-                            <span className="text-slate-700">All Projects ({projects.length})</span>
+                            <span className="text-black">All Projects ({projects.length})</span>
                           </label>
                           
                           {projects.map(project => (
@@ -1287,12 +2132,12 @@ export default function ProjectViewPage() {
                                 className="w-4 h-4"
                               />
                               <div className="flex items-center gap-2">
-                                <div className="w-6 h-6 bg-slate-200 rounded-lg flex items-center justify-center">
-                                  <FileText size={12} className="text-slate-600" />
+                                <div className="w-6 h-6 bg-gray-200 rounded-lg flex items-center justify-center">
+                                  <FileText size={12} className="text-gray-600" />
                                 </div>
                                 <div>
-                                  <span className="text-slate-700">{project.name}</span>
-                                  <div className="text-xs text-slate-500">{project.key}</div>
+                                  <span className="text-black">{project.name}</span>
+                                  <div className="text-xs text-gray-500">{project.key}</div>
                                 </div>
                               </div>
                             </label>
@@ -1302,7 +2147,7 @@ export default function ProjectViewPage() {
                       
                       {/* Date Range Selection */}
                       <div>
-                        <h3 className="text-sm font-bold text-slate-800 mb-3 flex items-center gap-2">
+                        <h3 className="text-sm font-bold text-black mb-3 flex items-center gap-2">
                           <CalendarIcon size={16} />
                           Date Range
                         </h3>
@@ -1314,7 +2159,7 @@ export default function ProjectViewPage() {
                               className={`px-3 py-2 text-sm rounded-lg border ${
                                 reportDateRange.type === type
                                   ? 'bg-[#3fa87d] text-white border-[#3fa87d]'
-                                  : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
+                                  : 'bg-gray-100 border-gray-200 text-black hover:bg-gray-200'
                               }`}
                             >
                               {type.replace(/([A-Z])/g, ' $1').replace(/^./, str => str.toUpperCase())}
@@ -1325,7 +2170,7 @@ export default function ProjectViewPage() {
                         {reportDateRange.type === 'custom' && (
                           <div className="flex items-center gap-4">
                             <div className="flex-1">
-                              <label className="text-xs font-medium text-slate-600 mb-1 block">From</label>
+                              <label className="text-xs font-medium text-gray-600 mb-1 block">From</label>
                               <input
                                 type="date"
                                 value={reportDateRange.startDate ? reportDateRange.startDate.toISOString().split('T')[0] : ''}
@@ -1334,11 +2179,11 @@ export default function ProjectViewPage() {
                                   startDate: e.target.value ? new Date(e.target.value) : null,
                                   type: 'custom'
                                 }))}
-                                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg"
+                                className="w-full px-3 py-2 bg-gray-100 border border-gray-200 rounded-lg text-black"
                               />
                             </div>
                             <div className="flex-1">
-                              <label className="text-xs font-medium text-slate-600 mb-1 block">To</label>
+                              <label className="text-xs font-medium text-gray-600 mb-1 block">To</label>
                               <input
                                 type="date"
                                 value={reportDateRange.endDate ? reportDateRange.endDate.toISOString().split('T')[0] : ''}
@@ -1347,7 +2192,7 @@ export default function ProjectViewPage() {
                                   endDate: e.target.value ? new Date(e.target.value) : null,
                                   type: 'custom'
                                 }))}
-                                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg"
+                                className="w-full px-3 py-2 bg-gray-100 border border-gray-200 rounded-lg text-black"
                               />
                             </div>
                           </div>
@@ -1357,20 +2202,20 @@ export default function ProjectViewPage() {
                       {/* Assignee Filter */}
                       <div>
                         <div className="flex items-center justify-between mb-3">
-                          <h3 className="text-sm font-bold text-slate-800 flex items-center gap-2">
+                          <h3 className="text-sm font-bold text-black flex items-center gap-2">
                             <UsersIcon size={16} />
                             Filter by Assignees (Optional)
                           </h3>
                           <div className="flex gap-2">
                             <button
                               onClick={() => toggleAllReportAssignees(true)}
-                              className="text-xs px-2 py-1 bg-slate-100 hover:bg-slate-200 rounded"
+                              className="text-xs px-2 py-1 bg-gray-100 hover:bg-gray-200 rounded text-black"
                             >
                               Select All
                             </button>
                             <button
                               onClick={() => toggleAllReportAssignees(false)}
-                              className="text-xs px-2 py-1 bg-slate-100 hover:bg-slate-200 rounded"
+                              className="text-xs px-2 py-1 bg-gray-100 hover:bg-gray-200 rounded text-black"
                             >
                               Clear All
                             </button>
@@ -1384,15 +2229,15 @@ export default function ProjectViewPage() {
                               placeholder="Search assignees..."
                               value={reportAssigneeSearch}
                               onChange={(e) => setReportAssigneeSearch(e.target.value)}
-                              className="w-full pl-10 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-lg"
+                              className="w-full pl-10 pr-4 py-2 bg-gray-100 border border-gray-200 rounded-lg placeholder:text-gray-500 text-black"
                             />
-                            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+                            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" size={16} />
                           </div>
                         </div>
                         
-                        <div className="max-h-60 overflow-y-auto border border-slate-200 rounded-lg">
+                        <div className="max-h-60 overflow-y-auto border border-gray-200 rounded-lg">
                           {filteredReportAssignees.length === 0 ? (
-                            <div className="p-4 text-center text-slate-500">
+                            <div className="p-4 text-center text-gray-500">
                               No assignees found
                             </div>
                           ) : (
@@ -1400,19 +2245,19 @@ export default function ProjectViewPage() {
                               {filteredReportAssignees.map(assignee => (
                                 <label
                                   key={assignee.id}
-                                  className="flex items-center gap-3 p-2 hover:bg-slate-50 rounded cursor-pointer"
+                                  className="flex items-center gap-3 p-2 hover:bg-gray-50 rounded cursor-pointer"
                                 >
                                   <input
                                     type="checkbox"
                                     checked={assignee.selected}
                                     onChange={() => toggleReportAssigneeSelection(assignee.id)}
-                                    className="w-4 h-4 rounded border-slate-300"
+                                    className="w-4 h-4 rounded border-gray-300"
                                   />
                                   <div className="flex items-center gap-2">
-                                    <div className="w-6 h-6 bg-slate-200 rounded-full flex items-center justify-center text-xs font-bold">
+                                    <div className="w-6 h-6 bg-gray-200 rounded-full flex items-center justify-center text-xs font-bold text-black">
                                       {assignee.name.charAt(0)}
                                     </div>
-                                    <span className="text-sm text-slate-700">{assignee.name}</span>
+                                    <span className="text-sm text-black">{assignee.name}</span>
                                   </div>
                                 </label>
                               ))}
@@ -1431,97 +2276,111 @@ export default function ProjectViewPage() {
                       
                       {/* Options */}
                       <div>
-                        <h3 className="text-sm font-bold text-slate-800 mb-3">Options</h3>
+                        <h3 className="text-sm font-bold text-black mb-3">Options</h3>
                         <div className="space-y-3">
                           <label className="flex items-center gap-3">
                             <input
                               type="checkbox"
                               checked={reportIncludeSubtasks}
                               onChange={(e) => setReportIncludeSubtasks(e.target.checked)}
-                              className="w-4 h-4 rounded border-slate-300"
+                              className="w-4 h-4 rounded border-gray-300"
                             />
-                            <span className="text-slate-700">Include subtasks in report</span>
+                            <span className="text-black">Include subtasks in report</span>
+                            <span className="text-xs text-gray-500">(Will show as "Subtask" type)</span>
                           </label>
                           <label className="flex items-center gap-3">
                             <input
                               type="checkbox"
                               checked={reportIncludeEpicTasks}
                               onChange={(e) => setReportIncludeEpicTasks(e.target.checked)}
-                              className="w-4 h-4 rounded border-slate-300"
+                              className="w-4 h-4 rounded border-gray-300"
                             />
-                            <span className="text-slate-700">Include epic information</span>
+                            <span className="text-black">Include epic information</span>
                           </label>
                         </div>
                       </div>
                       
                       {/* Report Statistics */}
-                      <div className="p-4 bg-slate-50 rounded-xl border border-slate-200">
-                        <h3 className="text-sm font-bold text-slate-800 mb-3">Report Summary</h3>
+                      <div className="p-4 bg-gray-100 rounded-xl border border-gray-200">
+                        <h3 className="text-sm font-bold text-black mb-3">Report Summary</h3>
                         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                           <div>
-                            <div className="text-xs text-slate-500">Total Tasks</div>
-                            <div className="text-xl font-bold text-slate-800">{reportStats.totalTasks}</div>
+                            <div className="text-xs text-gray-600">Main Tasks</div>
+                            <div className="text-xl font-bold text-black">{reportStats.totalTasks}</div>
                           </div>
                           <div>
-                            <div className="text-xs text-slate-500">Completion Rate</div>
-                            <div className="text-xl font-bold text-[#3fa87d]">{reportStats.completionRate}%</div>
+                            <div className="text-xs text-gray-600">Avg Main Task Progress</div>
+                            <div className="text-xl font-bold text-[#3fa87d]">{reportStats.averageProgress}%</div>
                           </div>
                           <div>
-                            <div className="text-xs text-slate-500">In Progress</div>
-                            <div className="text-xl font-bold text-blue-600">{reportStats.inProgressTasks}</div>
+                            <div className="text-xs text-gray-600">Blocked Main Tasks</div>
+                            <div className="text-xl font-bold text-red-600">{reportStats.blockedTasks}</div>
                           </div>
                           <div>
-                            <div className="text-xs text-slate-500">Story Points</div>
-                            <div className="text-xl font-bold text-slate-800">{reportStats.totalStoryPoints}</div>
-                          </div>
-                        </div>
-                        
-                        <div className="mt-4 grid grid-cols-2 gap-4">
-                          <div>
-                            <div className="text-xs text-slate-500">Projects</div>
-                            <div className="text-lg font-bold text-slate-800">{reportStats.projectStats.length}</div>
-                          </div>
-                          <div>
-                            <div className="text-xs text-slate-500">Assignees</div>
-                            <div className="text-lg font-bold text-slate-800">{reportStats.selectedAssigneeCount > 0 ? reportStats.selectedAssigneeCount : 'All'}</div>
+                            <div className="text-xs text-gray-600">Total Story Points</div>
+                            <div className="text-xl font-bold text-black">{reportStats.totalStoryPoints}</div>
                           </div>
                         </div>
                         
                         {reportIncludeSubtasks && reportStats.totalSubtasks > 0 && (
-                          <div className="mt-4 pt-4 border-t border-slate-200">
-                            <div className="grid grid-cols-2 gap-4">
+                          <div className="mt-4 pt-4 border-t border-gray-200">
+                            <h4 className="text-sm font-bold text-black mb-3">Subtasks Summary</h4>
+                            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                               <div>
-                                <div className="text-xs text-slate-500">Total Subtasks</div>
-                                <div className="text-lg font-bold text-slate-800">{reportStats.totalSubtasks}</div>
+                                <div className="text-xs text-gray-600">Total Subtasks</div>
+                                <div className="text-lg font-bold text-black">{reportStats.totalSubtasks}</div>
                               </div>
                               <div>
-                                <div className="text-xs text-slate-500">Completed Subtasks</div>
+                                <div className="text-xs text-gray-600">Completed Subtasks</div>
                                 <div className="text-lg font-bold text-green-600">{reportStats.completedSubtasks}</div>
+                              </div>
+                              <div>
+                                <div className="text-xs text-gray-600">In Progress Subtasks</div>
+                                <div className="text-lg font-bold text-blue-600">{reportStats.inProgressSubtasks}</div>
+                              </div>
+                              <div>
+                                <div className="text-xs text-gray-600">Blocked Subtasks</div>
+                                <div className="text-lg font-bold text-red-600">{reportStats.blockedSubtasks}</div>
                               </div>
                             </div>
                           </div>
                         )}
                         
+                        <div className="mt-4 grid grid-cols-2 gap-4">
+                          <div>
+                            <div className="text-xs text-gray-600">Projects</div>
+                            <div className="text-lg font-bold text-black">{reportStats.projectStats.length}</div>
+                          </div>
+                          <div>
+                            <div className="text-xs text-gray-600">Assignees</div>
+                            <div className="text-lg font-bold text-black">{reportStats.selectedAssigneeCount > 0 ? reportStats.selectedAssigneeCount : 'All'}</div>
+                          </div>
+                        </div>
+                        
                         {reportStats.projectStats.length > 0 && reportStats.projectStats.length <= 5 && (
-                          <div className="mt-4 pt-4 border-t border-slate-200">
-                            <h4 className="text-sm font-bold text-slate-800 mb-3">Projects Summary</h4>
+                          <div className="mt-4 pt-4 border-t border-gray-200">
+                            <h4 className="text-sm font-bold text-black mb-3">Projects Summary</h4>
                             <div className="space-y-2">
                               {reportStats.projectStats.map((stat, index) => (
-                                <div key={index} className="flex items-center justify-between p-2 bg-white rounded border">
+                                <div key={index} className="flex items-center justify-between p-2 bg-white rounded border border-gray-200">
                                   <div className="flex items-center gap-2">
-                                    <div className="w-6 h-6 bg-slate-200 rounded-lg flex items-center justify-center">
-                                      <FileText size={12} className="text-slate-600" />
+                                    <div className="w-6 h-6 bg-gray-200 rounded-lg flex items-center justify-center">
+                                      <FileText size={12} className="text-gray-600" />
                                     </div>
-                                    <span className="text-sm text-slate-700">{stat.name}</span>
+                                    <span className="text-sm text-black">{stat.name}</span>
                                   </div>
                                   <div className="flex items-center gap-4">
                                     <div className="text-right">
-                                      <div className="text-xs text-slate-500">Tasks</div>
-                                      <div className="text-sm font-bold text-slate-800">{stat.taskCount}</div>
+                                      <div className="text-xs text-gray-600">Main Tasks</div>
+                                      <div className="text-sm font-bold text-black">{stat.mainTaskCount}</div>
                                     </div>
                                     <div className="text-right">
-                                      <div className="text-xs text-slate-500">Completed</div>
-                                      <div className="text-sm font-bold text-green-600">{stat.completedCount}</div>
+                                      <div className="text-xs text-gray-600">Subtasks</div>
+                                      <div className="text-sm font-bold text-purple-600">{stat.subtaskCount}</div>
+                                    </div>
+                                    <div className="text-right">
+                                      <div className="text-xs text-gray-600">Progress</div>
+                                      <div className="text-sm font-bold text-blue-600">{stat.progress}%</div>
                                     </div>
                                   </div>
                                 </div>
@@ -1531,25 +2390,29 @@ export default function ProjectViewPage() {
                         )}
                         
                         {reportStats.assigneeStats.length > 0 && (
-                          <div className="mt-4 pt-4 border-t border-slate-200">
-                            <h4 className="text-sm font-bold text-slate-800 mb-3">Assignee Summary</h4>
+                          <div className="mt-4 pt-4 border-t border-gray-200">
+                            <h4 className="text-sm font-bold text-black mb-3">Assignee Summary</h4>
                             <div className="space-y-2">
                               {reportStats.assigneeStats.map((stat, index) => (
-                                <div key={index} className="flex items-center justify-between p-2 bg-white rounded border">
+                                <div key={index} className="flex items-center justify-between p-2 bg-white rounded border border-gray-200">
                                   <div className="flex items-center gap-2">
-                                    <div className="w-6 h-6 bg-slate-200 rounded-full flex items-center justify-center text-xs font-bold">
+                                    <div className="w-6 h-6 bg-gray-200 rounded-full flex items-center justify-center text-xs font-bold text-black">
                                       {stat.name.charAt(0)}
                                     </div>
-                                    <span className="text-sm text-slate-700">{stat.name}</span>
+                                    <span className="text-sm text-black">{stat.name}</span>
                                   </div>
                                   <div className="flex items-center gap-4">
                                     <div className="text-right">
-                                      <div className="text-xs text-slate-500">Tasks</div>
-                                      <div className="text-sm font-bold text-slate-800">{stat.taskCount}</div>
+                                      <div className="text-xs text-gray-600">Main Tasks</div>
+                                      <div className="text-sm font-bold text-black">{stat.mainTaskCount}</div>
                                     </div>
                                     <div className="text-right">
-                                      <div className="text-xs text-slate-500">Completed</div>
-                                      <div className="text-sm font-bold text-green-600">{stat.completedCount}</div>
+                                      <div className="text-xs text-gray-600">Subtasks</div>
+                                      <div className="text-sm font-bold text-purple-600">{stat.subtaskCount}</div>
+                                    </div>
+                                    <div className="text-right">
+                                      <div className="text-xs text-gray-600">Progress</div>
+                                      <div className="text-sm font-bold text-blue-600">{stat.mainTaskProgress}%</div>
                                     </div>
                                   </div>
                                 </div>
@@ -1560,27 +2423,31 @@ export default function ProjectViewPage() {
                       </div>
                       
                       {/* Actions */}
-                      <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-200">
+                      <div className="flex items-center justify-end gap-3 pt-4 border-t border-gray-200">
                         <button
                           onClick={() => setShowReportPanel(false)}
-                          className="px-4 py-2 text-slate-700 hover:bg-slate-100 rounded-xl"
+                          className="px-4 py-2 text-black hover:bg-gray-100 rounded-xl"
                         >
                           Cancel
                         </button>
                         <button
-                          onClick={exportToExcel}
-                          disabled={reportExporting}
+                          onClick={handleExport}
+                          disabled={reportExporting || reportExportingPDF}
                           className="flex items-center gap-2 px-4 py-2 bg-[#3fa87d] text-white rounded-xl hover:bg-[#3fa87d]/90 disabled:opacity-50 disabled:cursor-not-allowed"
                         >
-                          {reportExporting ? (
+                          {reportExporting || reportExportingPDF ? (
                             <>
                               <div className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent"></div>
-                              <span>Exporting...</span>
+                              <span>
+                                {reportExporting ? 'Exporting Excel...' : 'Generating PDF...'}
+                              </span>
                             </>
                           ) : (
                             <>
-                              <Download size={18} />
-                              <span>Export to Excel</span>
+                              {reportType === 'excel' ? <Download size={18} /> : <FileText size={18} />}
+                              <span>
+                                {reportType === 'excel' ? 'Export to Excel' : 'Generate PDF Report'}
+                              </span>
                             </>
                           )}
                         </button>
@@ -1593,26 +2460,26 @@ export default function ProjectViewPage() {
               <div className="p-6">
                 {!selectedProject ? (
                   <div className="h-full flex flex-col items-center justify-center">
-                    <Target className="text-slate-300 mb-4" size={48} />
-                    <p className="text-slate-400 font-bold mb-2">Select a project to view details</p>
-                    <p className="text-slate-400 text-sm">Or generate a report for all projects using the button above</p>
+                    <Target className="text-gray-300 mb-4" size={48} />
+                    <p className="text-gray-400 font-bold mb-2">Select a project to view details</p>
+                    <p className="text-gray-400 text-sm">Or generate a report for all projects using the button above</p>
                   </div>
                 ) : (
                   <div className="space-y-6">
                     {/* Project Header */}
-                    <div className="pb-4 border-b border-slate-100">
+                    <div className="pb-4 border-b border-gray-100">
                       <div className="flex items-center justify-between mb-2">
                         <div>
                           <div className="flex items-center gap-3">
-                            <h2 className="text-xl font-bold text-slate-800">{selectedProject.name}</h2>
-                            <span className="px-2 py-1 bg-slate-100 text-slate-700 text-xs font-bold rounded-full">
+                            <h2 className="text-xl font-bold text-black">{selectedProject.name}</h2>
+                            <span className="px-2 py-1 bg-gray-100 text-black text-xs font-bold rounded-full">
                               {selectedProject.key}
                             </span>
                           </div>
-                          <p className="text-slate-600 mt-1">{selectedProject.description}</p>
+                          <p className="text-gray-600 mt-1">{selectedProject.description}</p>
                         </div>
                         <div className="text-right">
-                          <div className="text-sm text-slate-500">Overall Progress</div>
+                          <div className="text-sm text-gray-600">Overall Progress</div>
                           <div className="text-3xl font-bold text-[#3fa87d]">
                             {calculateProjectProgress(selectedProject)}%
                           </div>
@@ -1623,115 +2490,151 @@ export default function ProjectViewPage() {
                     {/* Epics Section */}
                     <div>
                       <div className="flex items-center justify-between mb-4">
-                        <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+                        <h3 className="text-lg font-bold text-black flex items-center gap-2">
                           <Target size={20} />
                           Epics ({getProjectEpics.length})
                         </h3>
                       </div>
 
                       <div className="space-y-3">
-                        {getProjectEpics.map(epic => {
-                          const isExpanded = expandedEpics.has(epic._id);
-                          const epicTasks = tasks.filter(task => task.epicId === epic._id);
-                          
-                          return (
-                            <div key={epic._id} className="border-2 border-slate-200 rounded-2xl">
-                              {/* Epic Header */}
-                              <div 
-                                className="p-4 cursor-pointer hover:bg-slate-50 transition-colors"
-                                onClick={() => toggleEpicExpand(epic._id)}
-                              >
-                                <div className="flex items-center justify-between">
-                                  <div className="flex items-center gap-3">
-                                    {isExpanded ? (
-                                      <ChevronDown size={20} className="text-slate-500" />
-                                    ) : (
-                                      <ChevronRight size={20} className="text-slate-500" />
-                                    )}
-                                    <div>
-                                      <div className="flex items-center gap-2">
-                                        <span className="px-2 py-1 bg-purple-100 text-purple-800 text-xs font-bold rounded-full">
-                                          {epic.epicId}
-                                        </span>
-                                        <h4 className="font-bold text-slate-800">{epic.name}</h4>
-                                      </div>
-                                      <p className="text-sm text-slate-600 mt-1">{epic.description}</p>
-                                    </div>
-                                  </div>
-                                  
-                                  <div className="flex items-center gap-4">
-                                    <div className="text-right">
-                                      <div className="text-xs text-slate-500">Progress</div>
-                                      <div className="text-lg font-bold text-slate-800">
-                                        {calculateEpicProgress(epic)}%
+                        {getProjectEpics.length === 0 ? (
+                          <div className="p-6 text-center border-2 border-dashed border-gray-200 rounded-xl">
+                            <Target className="mx-auto text-gray-300 mb-2" size={32} />
+                            <p className="text-gray-500 font-medium">No epics in this project</p>
+                            <p className="text-gray-400 text-sm">Tasks will be shown directly below</p>
+                          </div>
+                        ) : (
+                          getProjectEpics.map(epic => {
+                            const isExpanded = expandedEpics.has(epic._id);
+                            const epicTasks = tasks.filter(task => task.epicId === epic._id);
+                            const epicProgress = calculateEpicProgress(epic);
+                            
+                            return (
+                              <div key={epic._id} className="border-2 border-gray-200 rounded-2xl">
+                                {/* Epic Header */}
+                                <div 
+                                  className="p-4 cursor-pointer hover:bg-gray-50 transition-colors"
+                                  onClick={() => toggleEpicExpand(epic._id)}
+                                >
+                                  <div className="flex items-center justify-between">
+                                    <div className="flex items-center gap-3">
+                                      {isExpanded ? (
+                                        <ChevronDown size={20} className="text-gray-500" />
+                                      ) : (
+                                        <ChevronRight size={20} className="text-gray-500" />
+                                      )}
+                                      <div>
+                                        <div className="flex items-center gap-2">
+                                          <span className="px-2 py-1 bg-purple-100 text-purple-800 text-xs font-bold rounded-full border border-purple-200">
+                                            {epic.epicId}
+                                          </span>
+                                          <h4 className="font-bold text-black">{epic.name}</h4>
+                                        </div>
+                                        <p className="text-sm text-gray-600 mt-1">{epic.description}</p>
                                       </div>
                                     </div>
                                     
-                                    <div className="text-right">
-                                      <div className="text-xs text-slate-500">Tasks</div>
-                                      <div className="text-lg font-bold text-slate-800">
-                                        {epicTasks.length}
+                                    <div className="flex items-center gap-4">
+                                      <div className="text-right">
+                                        <div className="text-xs text-gray-600">Progress</div>
+                                        <div className="text-lg font-bold text-black">
+                                          {epicProgress}%
+                                        </div>
+                                      </div>
+                                      
+                                      <div className="text-right">
+                                        <div className="text-xs text-gray-600">Tasks</div>
+                                        <div className="text-lg font-bold text-black">
+                                          {epicTasks.length}
+                                        </div>
                                       </div>
                                     </div>
                                   </div>
-                                </div>
-                              </div>
-
-                              {/* Tasks List (if expanded) */}
-                              {isExpanded && (
-                                <div className="p-4 pt-0">
-                                  <div className="space-y-3 mt-3">
-                                    {epicTasks.length === 0 ? (
-                                      <div className="p-4 text-center border-2 border-dashed border-slate-100 rounded-xl">
-                                        <ClipboardCheck className="mx-auto text-slate-300 mb-2" size={24} />
-                                        <p className="text-slate-400">No tasks in this epic</p>
-                                      </div>
-                                    ) : (
-                                      epicTasks.map(task => (
-                                        <TaskCard
-                                          key={task._id}
-                                          task={task}
-                                          isExpanded={expandedTasks.has(task._id)}
-                                          onToggle={() => toggleTaskExpand(task._id)}
-                                          calculateProgress={calculateTaskProgress}
-                                          getStatusColor={getStatusColor}
-                                          getPriorityColor={getPriorityColor}
-                                          getSubtaskStatusColor={getSubtaskStatusColor}
-                                          getIssueTypeColor={getIssueTypeColor}
-                                          getIssueTypeIcon={getIssueTypeIcon}
-                                          getAssigneeNames={getAssigneeNames}
-                                          getReporterNames={getReporterNames}
-                                          formatDate={formatDate}
-                                        />
-                                      ))
-                                    )}
+                                  
+                                  {/* Epic Progress Bar */}
+                                  <div className="mt-3">
+                                    <div className="flex items-center justify-between mb-1">
+                                      <span className="text-xs text-gray-600">Epic Progress</span>
+                                      <span className="text-xs font-bold text-black">{epicProgress}%</span>
+                                    </div>
+                                    <div className="w-full bg-gray-200 rounded-full h-2">
+                                      <div 
+                                        className={`h-2 rounded-full ${
+                                          epicProgress === 100 ? 'bg-green-500' :
+                                          epicProgress >= 70 ? 'bg-blue-500' :
+                                          epicProgress >= 40 ? 'bg-yellow-500' :
+                                          'bg-red-500'
+                                        }`}
+                                        style={{ width: `${Math.min(epicProgress, 100)}%` }}
+                                      />
+                                    </div>
                                   </div>
                                 </div>
-                              )}
-                            </div>
-                          );
-                        })}
+
+                                {/* Tasks List (if expanded) */}
+                                {isExpanded && (
+                                  <div className="p-4 pt-0">
+                                    <div className="space-y-3 mt-3">
+                                      {epicTasks.length === 0 ? (
+                                        <div className="p-4 text-center border-2 border-dashed border-gray-100 rounded-xl">
+                                          <ClipboardCheck className="mx-auto text-gray-300 mb-2" size={24} />
+                                          <p className="text-gray-400">No tasks in this epic</p>
+                                        </div>
+                                      ) : (
+                                        epicTasks.map(task => (
+                                          <TaskCard
+                                            key={task._id}
+                                            task={task}
+                                            isExpanded={expandedTasks.has(task._id)}
+                                            onToggle={() => toggleTaskExpand(task._id)}
+                                            calculateProgress={calculateTaskProgress}
+                                            getStatusColor={getStatusColor}
+                                            getPriorityColor={getPriorityColor}
+                                            getSubtaskStatusColor={getSubtaskStatusColor}
+                                            getIssueTypeColor={getIssueTypeColor}
+                                            getIssueTypeIcon={getIssueTypeIcon}
+                                            getAssigneeNames={getAssigneeNames}
+                                            getReporterNames={getReporterNames}
+                                            formatDate={formatDate}
+                                          />
+                                        ))
+                                      )}
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })
+                        )}
 
                         {/* If no epics, show tasks directly */}
                         {getProjectEpics.length === 0 && (
                           <div className="space-y-3">
-                            {getFilteredTasks.map(task => (
-                              <TaskCard
-                                key={task._id}
-                                task={task}
-                                isExpanded={expandedTasks.has(task._id)}
-                                onToggle={() => toggleTaskExpand(task._id)}
-                                calculateProgress={calculateTaskProgress}
-                                getStatusColor={getStatusColor}
-                                getPriorityColor={getPriorityColor}
-                                getSubtaskStatusColor={getSubtaskStatusColor}
-                                getIssueTypeColor={getIssueTypeColor}
-                                getIssueTypeIcon={getIssueTypeIcon}
-                                getAssigneeNames={getAssigneeNames}
-                                getReporterNames={getReporterNames}
-                                formatDate={formatDate}
-                              />
-                            ))}
+                            {getFilteredTasks.length === 0 ? (
+                              <div className="p-6 text-center border-2 border-dashed border-gray-200 rounded-xl">
+                                <ClipboardCheck className="mx-auto text-gray-300 mb-2" size={32} />
+                                <p className="text-gray-500 font-medium">No tasks in this project</p>
+                                <p className="text-gray-400 text-sm">Try changing your filters</p>
+                              </div>
+                            ) : (
+                              getFilteredTasks.map(task => (
+                                <TaskCard
+                                  key={task._id}
+                                  task={task}
+                                  isExpanded={expandedTasks.has(task._id)}
+                                  onToggle={() => toggleTaskExpand(task._id)}
+                                  calculateProgress={calculateTaskProgress}
+                                  getStatusColor={getStatusColor}
+                                  getPriorityColor={getPriorityColor}
+                                  getSubtaskStatusColor={getSubtaskStatusColor}
+                                  getIssueTypeColor={getIssueTypeColor}
+                                  getIssueTypeIcon={getIssueTypeIcon}
+                                  getAssigneeNames={getAssigneeNames}
+                                  getReporterNames={getReporterNames}
+                                  formatDate={formatDate}
+                                />
+                              ))
+                            )}
                           </div>
                         )}
                       </div>

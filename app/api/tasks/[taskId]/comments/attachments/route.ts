@@ -199,7 +199,6 @@ export async function GET(
     console.log('Task ID:', taskId);
     
     // Allow public read access - don't require authentication for GET requests
-    // This fixes the 401 error you were seeing in the logs
     console.log('Allowing public read access for GET comments');
     
     if (!taskId || !mongoose.Types.ObjectId.isValid(taskId)) {
@@ -232,20 +231,26 @@ export async function GET(
     
     const total = await Comment.countDocuments({ taskId });
     
-    // Format comments with attachments
+    // Format comments with attachments - FIXED: Use 'content' instead of 'text'
     const formattedComments = comments.map(comment => ({
       ...comment,
       _id: comment._id?.toString(),
       id: comment._id?.toString(),
+      content: comment.text || '', // Map 'text' field from database to 'content' for frontend
+      text: comment.text || '', // Keep for backward compatibility
       attachments: comment.attachments?.map((attachment: any) => ({
         id: attachment._id?.toString(),
+        _id: attachment._id?.toString(),
         url: attachment.url,
         fileName: attachment.fileName,
         fileType: attachment.fileType,
         fileSize: attachment.size,
+        size: attachment.size,
+        mimeType: attachment.fileType,
         uploadedAt: attachment.uploadedAt,
         uploadedBy: attachment.uploadedBy,
         uploadedById: attachment.uploadedById,
+        uploadedByName: attachment.uploadedBy,
       })) || [],
     }));
     
@@ -253,11 +258,15 @@ export async function GET(
     await Task.findByIdAndUpdate(taskId, { commentCount: total });
     
     console.log(`Returning ${formattedComments.length} comments for task ${taskId}`);
-    console.log('Sample comment with attachments:', 
-      formattedComments[0]?.attachments?.length 
-        ? `Has ${formattedComments[0].attachments.length} attachments` 
-        : 'No attachments'
-    );
+    if (formattedComments.length > 0) {
+      console.log('First comment sample:', {
+        id: formattedComments[0]._id,
+        hasContent: !!formattedComments[0].content,
+        hasText: !!formattedComments[0].text,
+        contentLength: formattedComments[0].content?.length,
+        attachmentsCount: formattedComments[0].attachments?.length
+      });
+    }
     
     return NextResponse.json({
       success: true,
@@ -340,7 +349,7 @@ export async function POST(
       
       // Handle file upload
       const formData = await request.formData();
-      text = (formData.get('text') as string) || '';
+      text = (formData.get('text') as string) || (formData.get('content') as string) || '';
       
       // Get uploaded files
       const files = formData.getAll('attachments') as File[];
@@ -381,7 +390,7 @@ export async function POST(
       // Handle JSON request (text only)
       try {
         const body = await request.json();
-        text = body.text || '';
+        text = body.text || body.content || '';
       } catch (error) {
         console.log('No JSON body or empty body');
       }
@@ -462,15 +471,20 @@ export async function POST(
       ...commentObj,
       _id: commentObj._id.toString(),
       id: commentObj._id.toString(),
+      content: commentObj.text || '', // Add content field for frontend
       attachments: commentObj.attachments?.map((attachment: any) => ({
         id: attachment._id?.toString(),
+        _id: attachment._id?.toString(),
         url: attachment.url,
         fileName: attachment.fileName,
         fileType: attachment.fileType,
         fileSize: attachment.size,
+        size: attachment.size,
+        mimeType: attachment.fileType,
         uploadedAt: attachment.uploadedAt,
         uploadedBy: attachment.uploadedBy,
         uploadedById: attachment.uploadedById,
+        uploadedByName: attachment.uploadedBy,
       })) || [],
     };
     
@@ -485,6 +499,7 @@ export async function POST(
     console.log('Comment saved:', {
       id: formattedComment._id,
       text: formattedComment.text,
+      content: formattedComment.content,
       userName: formattedComment.userName,
       userRole: formattedComment.userRole,
       attachmentsCount: formattedComment.attachments.length,
@@ -569,7 +584,7 @@ export async function PUT(
       
       // Handle form data with file upload
       const formData = await request.formData();
-      text = (formData.get('text') as string) || '';
+      text = (formData.get('text') as string) || (formData.get('content') as string) || '';
       commentId = (formData.get('commentId') as string) || '';
       
       // Get removed attachment IDs
@@ -621,7 +636,7 @@ export async function PUT(
       // Handle JSON request
       try {
         const body = await request.json();
-        text = body.text || '';
+        text = body.text || body.content || '';
         commentId = body.commentId || '';
         removedAttachmentIds = body.removedAttachmentIds || [];
       } catch (error) {
@@ -776,6 +791,7 @@ export async function PUT(
       comment.text = '';
     }
     comment.attachments = updatedAttachments;
+    comment.editedAt = new Date();
     await comment.save();
     
     // Update last comment timestamp in task
@@ -790,15 +806,20 @@ export async function PUT(
       ...commentObj,
       _id: commentObj._id.toString(),
       id: commentObj._id.toString(),
+      content: commentObj.text || '', // Add content field for frontend
       attachments: commentObj.attachments?.map((attachment: any) => ({
         id: attachment._id?.toString(),
+        _id: attachment._id?.toString(),
         url: attachment.url,
         fileName: attachment.fileName,
         fileType: attachment.fileType,
         fileSize: attachment.size,
+        size: attachment.size,
+        mimeType: attachment.fileType,
         uploadedAt: attachment.uploadedAt,
         uploadedBy: attachment.uploadedBy,
         uploadedById: attachment.uploadedById,
+        uploadedByName: attachment.uploadedBy,
       })) || [],
     };
     
@@ -806,6 +827,7 @@ export async function PUT(
     console.log('Updated comment details:', {
       id: formattedComment._id,
       text: formattedComment.text,
+      content: formattedComment.content,
       userName: formattedComment.userName,
       userRole: formattedComment.userRole,
       editedAt: formattedComment.editedAt,
@@ -1043,6 +1065,7 @@ async function handleAttachmentDelete(
   );
   
   comment.attachments = updatedAttachments;
+  comment.editedAt = new Date();
   await comment.save();
   
   console.log(`Deleted attachment ${attachmentId} from comment ${commentId} in task ${taskId}`);
@@ -1053,15 +1076,20 @@ async function handleAttachmentDelete(
     ...commentObj,
     _id: commentObj._id.toString(),
     id: commentObj._id.toString(),
+    content: commentObj.text || '', // Add content field for frontend
     attachments: commentObj.attachments?.map((att: any) => ({
       id: att._id?.toString(),
+      _id: att._id?.toString(),
       url: att.url,
       fileName: att.fileName,
       fileType: att.fileType,
       fileSize: att.size,
+      size: att.size,
+      mimeType: att.fileType,
       uploadedAt: att.uploadedAt,
       uploadedBy: att.uploadedBy,
       uploadedById: att.uploadedById,
+      uploadedByName: att.uploadedBy,
     })) || [],
   };
   

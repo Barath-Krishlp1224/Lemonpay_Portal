@@ -8,7 +8,7 @@ import {
     Draggable,
     DropResult,
 } from '@hello-pangea/dnd';
-import { Clock, CheckCircle2, AlertCircle, MoreHorizontal, Target, User, Folder, Shield, ChevronDown, ChevronUp } from 'lucide-react';
+import { Clock, CheckCircle2, AlertCircle, MoreHorizontal, Target, User, Folder, Shield, ChevronDown, ChevronUp, Lock } from 'lucide-react';
 
 interface TaskBoardViewProps {
     tasks: Task[];
@@ -17,10 +17,55 @@ interface TaskBoardViewProps {
     currentUserRole?: string;
     currentUserName?: string;
     currentUserId?: string;
-    containerHeight?: string;     // New: Container height
-    columnMaxHeight?: string;     // New: Column max height
-    visibleRows?: number;         // New: Visible rows per column
+    containerHeight?: string;
+    columnMaxHeight?: string;
+    visibleRows?: number;
 }
+
+// Calculate task progress from subtasks
+const calculateTaskProgressFromSubtasks = (subtasks: any[] | undefined | null): number => {
+    if (!subtasks || subtasks.length === 0) return 0;
+    
+    const calculateSubtaskProgress = (subtask: any): number => {
+        if (subtask.progress !== undefined) {
+            return Number(subtask.progress) || 0;
+        }
+        
+        switch (subtask.status?.toLowerCase()) {
+            case "completed":
+            case "done":
+                return 100;
+            case "in progress":
+                return 50;
+            case "paused":
+                return 25;
+            case "to do":
+            case "todo":
+            default:
+                return 0;
+        }
+    };
+    
+    const flattenSubtasks = (subtasksList: any[]): any[] => {
+        let flatList: any[] = [];
+        subtasksList.forEach(sub => {
+            flatList.push(sub);
+            if (sub.subtasks && sub.subtasks.length > 0) {
+                flatList = [...flatList, ...flattenSubtasks(sub.subtasks)];
+            }
+        });
+        return flatList;
+    };
+    
+    const allSubtasks = flattenSubtasks(subtasks);
+    if (allSubtasks.length === 0) return 0;
+    
+    const totalProgress = allSubtasks.reduce((sum, sub) => {
+        return sum + calculateSubtaskProgress(sub);
+    }, 0);
+    
+    return Math.round(totalProgress / allSubtasks.length);
+};
 
 // Extended status columns with more workflow states
 const statusColumns = [
@@ -55,6 +100,17 @@ const getProgressGradient = (completion: number) => {
     return 'bg-rose-500';
 };
 
+// Check if user can edit task based on progress
+const canEditTaskBasedOnProgress = (taskProgress: number, currentUserRole: string): boolean => {
+    if (currentUserRole === "Admin" || currentUserRole === "Manager") return true;
+    
+    if (currentUserRole === "Employee") {
+        return taskProgress < 100;
+    }
+    
+    return false;
+};
+
 interface TaskCardProps {
     task: Task; 
     index: number; 
@@ -72,32 +128,39 @@ const TaskCard: React.FC<TaskCardProps> = ({
     currentUserName = "",
     currentUserId = ""
 }) => {
-    // Get task display name - using summary, title, name, or fallback to taskId
+    // Calculate task progress from subtasks
+    const calculatedProgress = useMemo(() => {
+        return calculateTaskProgressFromSubtasks(task.subtasks);
+    }, [task.subtasks]);
+    
     const taskDisplayName = task.displayName || 
                            task.summary || 
                            task.title || 
                            task.name || 
                            `Task ${task.taskId || task._id?.substring(0, 8)}`;
     
-    // Get project name - prefer projectName, then project, then extract from taskId
     const projectName = task.projectName || task.project || (task.taskId ? task.taskId.split('-')[0] : 'Project');
     
-    // Get assignee display - first assignee or fallback
     const displayAssignee = task.assigneeNames && task.assigneeNames.length > 0 
         ? task.assigneeNames[0] 
         : 'Unassigned';
     
-    // Check if current user is assigned to this task
     const isAssignedToCurrentUser = currentUserRole === "Employee" ? 
         task.assigneeNames?.some(name => name.toLowerCase() === currentUserName.toLowerCase()) ||
         task.assigneeIds?.some(id => id === currentUserId)
         : true;
+    
+    // Check if task can be edited based on progress
+    const canEditTask = canEditTaskBasedOnProgress(calculatedProgress, currentUserRole);
+    
+    // Check if task is 100% complete
+    const isTaskCompleted = calculatedProgress >= 100;
 
     return (
         <Draggable 
             draggableId={task._id} 
             index={index}
-            isDragDisabled={!isAssignedToCurrentUser && currentUserRole === "Employee"}
+            isDragDisabled={(!isAssignedToCurrentUser && currentUserRole === "Employee") || isTaskCompleted}
         >
             {(provided, snapshot) => (
                 <div
@@ -106,9 +169,12 @@ const TaskCard: React.FC<TaskCardProps> = ({
                     {...provided.dragHandleProps}
                     className={`group bg-white p-6 rounded-[2rem] border border-slate-100 cursor-pointer transition-all duration-300 mb-4
                         ${snapshot.isDragging ? 'rotate-2 scale-105 shadow-2xl z-50 ring-2 ring-blue-500/20' : 'hover:shadow-xl hover:-translate-y-1'}
-                        ${!isAssignedToCurrentUser && currentUserRole === "Employee" ? 'opacity-60 cursor-not-allowed' : ''}`}
+                        ${(!isAssignedToCurrentUser && currentUserRole === "Employee") ? 'opacity-60 cursor-not-allowed' : ''}
+                        ${isTaskCompleted ? 'border-emerald-100 bg-emerald-50/30' : ''}`}
                     onClick={() => {
-                        if (isAssignedToCurrentUser || currentUserRole !== "Employee") {
+                        if ((isAssignedToCurrentUser || currentUserRole !== "Employee") && canEditTask) {
+                            openTaskModal(task);
+                        } else if (isTaskCompleted) {
                             openTaskModal(task);
                         }
                     }}
@@ -142,6 +208,12 @@ const TaskCard: React.FC<TaskCardProps> = ({
                                         {task.priority}
                                     </span>
                                 )}
+                                {isTaskCompleted && (
+                                    <span className="text-[8px] font-black px-2 py-1 rounded-full uppercase tracking-wider bg-emerald-100 text-emerald-700 border border-emerald-200 flex items-center gap-1">
+                                        <CheckCircle2 size={8} />
+                                        Complete
+                                    </span>
+                                )}
                             </div>
                         </div>
                         <div className="flex items-center gap-1">
@@ -149,6 +221,12 @@ const TaskCard: React.FC<TaskCardProps> = ({
                                 <div className="flex items-center gap-1 bg-slate-100 px-2 py-1 rounded-full mr-1">
                                     <Shield size={10} className="text-slate-400" />
                                     <span className="text-[8px] font-bold text-slate-500">Not Assigned</span>
+                                </div>
+                            )}
+                            {isTaskCompleted && !canEditTask && currentUserRole === "Employee" && (
+                                <div className="flex items-center gap-1 bg-emerald-100 px-2 py-1 rounded-full mr-1">
+                                    <Lock size={10} className="text-emerald-500" />
+                                    <span className="text-[8px] font-bold text-emerald-700">Read Only</span>
                                 </div>
                             )}
                             <button className="text-slate-300 group-hover:text-slate-600 transition-colors p-1 hover:bg-slate-100 rounded-full">
@@ -161,6 +239,11 @@ const TaskCard: React.FC<TaskCardProps> = ({
                     <div className="mb-4">
                         <h4 className="text-sm font-black text-slate-800 leading-tight mb-2 group-hover:text-blue-600 transition-colors line-clamp-3 min-h-[3rem]">
                             {taskDisplayName}
+                            {isTaskCompleted && (
+                                <span className="ml-2 text-emerald-600">
+                                    ✓
+                                </span>
+                            )}
                         </h4>
                         {task.remarks && (
                             <p className="text-xs text-slate-500 leading-relaxed line-clamp-2 mt-2">
@@ -199,26 +282,38 @@ const TaskCard: React.FC<TaskCardProps> = ({
                     <div className="space-y-2">
                         <div className="flex justify-between items-center text-[10px] font-black uppercase tracking-tighter">
                             <span className="text-slate-400">Progress</span>
-                            <span className={`${getProgressGradient(task.completion).replace('bg', 'text')} font-bold`}>
-                                {task.completion}%
-                            </span>
+                            <div className="flex items-center gap-1">
+                                <span className={`${getProgressGradient(calculatedProgress).replace('bg', 'text')} font-bold`}>
+                                    {calculatedProgress}%
+                                </span>
+                                {calculatedProgress >= 100 && (
+                                    <span className="text-emerald-500 text-[8px]">
+                                        ✓
+                                    </span>
+                                )}
+                            </div>
                         </div>
                         <div className="bg-slate-50 h-1.5 rounded-full overflow-hidden">
                             <div 
-                                className={`h-full rounded-full transition-all duration-1000 ${getProgressGradient(task.completion)}`}
-                                style={{ width: `${task.completion}%` }}
+                                className={`h-full rounded-full transition-all duration-1000 ${getProgressGradient(calculatedProgress)}`}
+                                style={{ width: `${calculatedProgress}%` }}
                             />
                         </div>
+                        {task.subtasks && task.subtasks.length > 0 && (
+                            <div className="text-[9px] text-slate-400 font-medium mt-1">
+                                Calculated from {task.subtasks.length} subtask{task.subtasks.length !== 1 ? 's' : ''}
+                            </div>
+                        )}
                     </div>
 
                     {/* Subtask count and Issue Type */}
                     <div className="mt-3 pt-3 border-t border-slate-100">
                         <div className="flex items-center justify-between">
                             {task.subtasks && task.subtasks.length > 0 ? (
-                                <div className="flex items-center gap-1 text-[10px] text-slate-500 font-bold">
-                                    <CheckCircle2 size={10} />
-                                    <span>
-                                        {task.subtasks.filter(st => st.status === 'Completed').length}/{task.subtasks.length} subtasks
+                                <div className="flex items-center gap-1 text-[10px] font-bold">
+                                    <CheckCircle2 size={10} className={isTaskCompleted ? "text-emerald-500" : "text-slate-500"} />
+                                    <span className={isTaskCompleted ? "text-emerald-600" : "text-slate-600"}>
+                                        {task.subtasks.filter(st => st.status === 'Completed' || st.status === 'Done').length}/{task.subtasks.length} subtasks
                                     </span>
                                 </div>
                             ) : (
@@ -255,19 +350,16 @@ const TaskBoardView: React.FC<TaskBoardViewProps> = ({
     currentUserRole = "Employee",
     currentUserName = "",
     currentUserId = "",
-    containerHeight = "75vh",      // Slightly increased for more columns
-    columnMaxHeight = "65vh",      // Slightly increased
-    visibleRows = 2                // Default visible rows
+    containerHeight = "75vh",
+    columnMaxHeight = "65vh",
+    visibleRows = 2
 }) => {
-    // State to track which columns are expanded
     const [expandedColumns, setExpandedColumns] = useState<Record<string, boolean>>({});
 
     const tasksByStatus = useMemo(() => {
         return tasks.reduce((acc, task) => {
-            // Normalize status names for consistency
             let status = task.status || 'Backlog';
             
-            // Map similar statuses to standard columns
             const statusMap: Record<string, string> = {
                 'Icebox': 'Icebox',
                 'Backlog': 'Backlog',
@@ -308,7 +400,6 @@ const TaskBoardView: React.FC<TaskBoardViewProps> = ({
             
             const mappedStatus = statusMap[status] || status;
             
-            // Only include statuses that exist in our columns
             if (statusColumns.find(col => col.status === mappedStatus)) {
                 if (!acc[mappedStatus]) acc[mappedStatus] = [];
                 acc[mappedStatus].push(task);
@@ -323,17 +414,27 @@ const TaskBoardView: React.FC<TaskBoardViewProps> = ({
         if (!destination) return;
         if (destination.droppableId === source.droppableId && destination.index === source.index) return;
         
-        // Find the task being dragged
         const draggedTask = tasks.find(t => t._id === draggableId);
         
+        if (!draggedTask) return;
+        
+        // Calculate progress for the dragged task
+        const taskProgress = calculateTaskProgressFromSubtasks(draggedTask.subtasks);
+        
+        // Check if task is 100% complete
+        if (taskProgress >= 100) {
+            alert("Cannot move task: Task is 100% complete and locked");
+            return;
+        }
+        
         // Check permission for employees
-        if (currentUserRole === "Employee" && draggedTask) {
+        if (currentUserRole === "Employee") {
             const isAssigned = draggedTask.assigneeNames?.some(
                 name => name.toLowerCase() === currentUserName.toLowerCase()
             ) || draggedTask.assigneeIds?.some(id => id === currentUserId);
             
             if (!isAssigned) {
-                // Don't allow drag if employee is not assigned to this task
+                alert("You are not authorized to move this task");
                 return;
             }
         }
@@ -341,7 +442,6 @@ const TaskBoardView: React.FC<TaskBoardViewProps> = ({
         onTaskStatusChange(draggableId, destination.droppableId);
     };
 
-    // Toggle column expansion
     const toggleColumnExpansion = (status: string) => {
         setExpandedColumns(prev => ({
             ...prev,
@@ -349,7 +449,6 @@ const TaskBoardView: React.FC<TaskBoardViewProps> = ({
         }));
     };
 
-    // Get visible tasks for a column based on expansion state
     const getVisibleTasks = (status: string) => {
         const allTasks = tasksByStatus[status] || [];
         const isExpanded = expandedColumns[status];
@@ -376,6 +475,12 @@ const TaskBoardView: React.FC<TaskBoardViewProps> = ({
                         const isExpanded = expandedColumns[column.status];
                         const hasMoreTasks = columnTasks.length > visibleRows;
                         
+                        // Count completed tasks in this column
+                        const completedTasksCount = columnTasks.filter(task => {
+                            const progress = calculateTaskProgressFromSubtasks(task.subtasks);
+                            return progress >= 100;
+                        }).length;
+                        
                         return (
                             <div key={column.status} className="flex-shrink-0 w-[340px] flex flex-col h-full">
                                 
@@ -388,9 +493,16 @@ const TaskBoardView: React.FC<TaskBoardViewProps> = ({
                                                 {column.title}
                                             </h3>
                                             {columnTasks.length > 0 && (
-                                                <p className="text-[9px] text-slate-400 font-bold mt-0.5">
-                                                    {columnTasks.length} task{columnTasks.length !== 1 ? 's' : ''}
-                                                </p>
+                                                <div className="flex items-center gap-2 mt-0.5">
+                                                    <p className="text-[9px] text-slate-400 font-bold">
+                                                        {columnTasks.length} task{columnTasks.length !== 1 ? 's' : ''}
+                                                    </p>
+                                                    {completedTasksCount > 0 && (
+                                                        <span className="text-[8px] font-black bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded-full">
+                                                            {completedTasksCount} ✓
+                                                        </span>
+                                                    )}
+                                                </div>
                                             )}
                                         </div>
                                     </div>
@@ -430,17 +542,30 @@ const TaskBoardView: React.FC<TaskBoardViewProps> = ({
                                                 overflow-y-auto custom-scrollbar-thin border border-slate-100/50`}
                                             style={{ maxHeight: columnMaxHeight }}
                                         >
-                                            {visibleTasks.map((task, index) => (
-                                                <TaskCard 
-                                                    key={task._id} 
-                                                    task={task} 
-                                                    index={index} 
-                                                    openTaskModal={openTaskModal}
-                                                    currentUserRole={currentUserRole}
-                                                    currentUserName={currentUserName}
-                                                    currentUserId={currentUserId}
-                                                />
-                                            ))}
+                                            {visibleTasks.map((task, index) => {
+                                                const taskProgress = calculateTaskProgressFromSubtasks(task.subtasks);
+                                                const isTaskCompleted = taskProgress >= 100;
+                                                
+                                                return (
+                                                    <div key={task._id} className={isTaskCompleted ? 'relative' : ''}>
+                                                        {isTaskCompleted && (
+                                                            <div className="absolute top-2 right-2 z-10">
+                                                                <div className="bg-emerald-500 text-white p-1 rounded-full">
+                                                                    <CheckCircle2 size={12} />
+                                                                </div>
+                                                            </div>
+                                                        )}
+                                                        <TaskCard 
+                                                            task={task} 
+                                                            index={index} 
+                                                            openTaskModal={openTaskModal}
+                                                            currentUserRole={currentUserRole}
+                                                            currentUserName={currentUserName}
+                                                            currentUserId={currentUserId}
+                                                        />
+                                                    </div>
+                                                );
+                                            })}
 
                                             {provided.placeholder}
 
